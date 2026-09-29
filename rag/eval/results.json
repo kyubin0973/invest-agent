@@ -1,0 +1,977 @@
+{
+  "measured_at": "2026-09-29 21:59",
+  "summary": {
+    "scoped": {
+      "전체": {
+        "n": 64,
+        "hit@1": 0.5,
+        "hit@3": 0.719,
+        "hit@5": 0.797,
+        "mrr@5": 0.603
+      },
+      "기업 자료 (technology)": {
+        "n": 36,
+        "hit@1": 0.556,
+        "hit@3": 0.75,
+        "hit@5": 0.861,
+        "mrr@5": 0.659
+      },
+      "산업 자료 (industry)": {
+        "n": 28,
+        "hit@1": 0.429,
+        "hit@3": 0.679,
+        "hit@5": 0.714,
+        "mrr@5": 0.531
+      },
+      "한국어 질의": {
+        "n": 32,
+        "hit@1": 0.438,
+        "hit@3": 0.656,
+        "hit@5": 0.719,
+        "mrr@5": 0.539
+      },
+      "영어 질의": {
+        "n": 32,
+        "hit@1": 0.562,
+        "hit@3": 0.781,
+        "hit@5": 0.875,
+        "mrr@5": 0.668
+      }
+    },
+    "unfiltered": {
+      "전체": {
+        "n": 64,
+        "hit@1": 0.5,
+        "hit@3": 0.688,
+        "hit@5": 0.797,
+        "mrr@5": 0.6
+      },
+      "기업 자료 (technology)": {
+        "n": 36,
+        "hit@1": 0.556,
+        "hit@3": 0.75,
+        "hit@5": 0.861,
+        "mrr@5": 0.659
+      },
+      "산업 자료 (industry)": {
+        "n": 28,
+        "hit@1": 0.429,
+        "hit@3": 0.607,
+        "hit@5": 0.714,
+        "mrr@5": 0.523
+      },
+      "한국어 질의": {
+        "n": 32,
+        "hit@1": 0.438,
+        "hit@3": 0.625,
+        "hit@5": 0.719,
+        "mrr@5": 0.536
+      },
+      "영어 질의": {
+        "n": 32,
+        "hit@1": 0.562,
+        "hit@3": 0.75,
+        "hit@5": 0.875,
+        "mrr@5": 0.664
+      }
+    }
+  },
+  "per_question": [
+    {
+      "scope": "technology",
+      "company": "1x",
+      "answer": {
+        "source_id": "X4",
+        "page": 3
+      },
+      "lang": "ko",
+      "question": "1X Technologies의 NEO 손이 연간 10,000개 생산될 수 있는 이유는 무엇인가요?",
+      "rank_scoped": 1,
+      "top1_scoped": "X4_P03_C02",
+      "rank_unfiltered": 1,
+      "top1_unfiltered": "X4_P03_C02"
+    },
+    {
+      "scope": "technology",
+      "company": "1x",
+      "answer": {
+        "source_id": "X4",
+        "page": 3
+      },
+      "lang": "en",
+      "question": "What enables 1X Technologies to produce 10,000 units of the NEO hand annually?",
+      "rank_scoped": 1,
+      "top1_scoped": "X4_P03_C02",
+      "rank_unfiltered": 1,
+      "top1_unfiltered": "X4_P03_C02"
+    },
+    {
+      "scope": "technology",
+      "company": "1x",
+      "answer": {
+        "source_id": "X1",
+        "page": 2
+      },
+      "lang": "ko",
+      "question": "1X Technologies의 Redwood AI는 다양한 환경에서 로봇이 효과적으로 작업을 수행할 수 있도록 어떤 기술적 접근 방식을 사용하고 있나요?",
+      "rank_scoped": null,
+      "top1_scoped": "X1_P01_C01",
+      "rank_unfiltered": null,
+      "top1_unfiltered": "X1_P01_C01"
+    },
+    {
+      "scope": "technology",
+      "company": "1x",
+      "answer": {
+        "source_id": "X1",
+        "page": 2
+      },
+      "lang": "en",
+      "question": "What technical approaches does 1X Technologies' Redwood AI utilize to enable robots to effectively operate in diverse environments?",
+      "rank_scoped": 3,
+      "top1_scoped": "X1_P01_C01",
+      "rank_unfiltered": 3,
+      "top1_unfiltered": "X1_P01_C01"
+    },
+    {
+      "scope": "technology",
+      "company": "1x",
+      "answer": {
+        "source_id": "X1",
+        "page": 1
+      },
+      "lang": "ko",
+      "question": "1X Technologies의 Redwood AI 모델은 새로운 물체를 조작할 때 어떤 방식으로 일반화 능력을 발휘하며, 이를 위해 어떤 종류의 데이터셋을 사용했는가?",
+      "rank_scoped": 1,
+      "top1_scoped": "X1_P01_C01",
+      "rank_unfiltered": 1,
+      "top1_unfiltered": "X1_P01_C01"
+    },
+    {
+      "scope": "technology",
+      "company": "1x",
+      "answer": {
+        "source_id": "X1",
+        "page": 1
+      },
+      "lang": "en",
+      "question": "How does 1X Technologies' Redwood AI model demonstrate its generalization capabilities when manipulating new objects, and what type of dataset was utilized for this purpose?",
+      "rank_scoped": 1,
+      "top1_scoped": "X1_P01_C01",
+      "rank_unfiltered": 1,
+      "top1_unfiltered": "X1_P01_C01"
+    },
+    {
+      "scope": "technology",
+      "company": "1x",
+      "answer": {
+        "source_id": "X3",
+        "page": 1
+      },
+      "lang": "ko",
+      "question": "1X Technologies의 1XWM 모델이 기존의 비전-언어-행동 모델과 비교했을 때, 로봇의 행동 예측에서 어떤 혁신적인 접근 방식을 채택하고 있는지 구체적인 사례를 들어 설명해 줄 수 있나요?",
+      "rank_scoped": null,
+      "top1_scoped": "X3_P04_C02",
+      "rank_unfiltered": null,
+      "top1_unfiltered": "X3_P04_C02"
+    },
+    {
+      "scope": "technology",
+      "company": "1x",
+      "answer": {
+        "source_id": "X3",
+        "page": 1
+      },
+      "lang": "en",
+      "question": "Can you provide specific examples of how 1X Technologies' 1XWM model adopts innovative approaches in action prediction compared to traditional vision-language-action models?",
+      "rank_scoped": 4,
+      "top1_scoped": "X3_P04_C02",
+      "rank_unfiltered": 4,
+      "top1_unfiltered": "X3_P04_C02"
+    },
+    {
+      "scope": "technology",
+      "company": "1x",
+      "answer": {
+        "source_id": "X2",
+        "page": 2
+      },
+      "lang": "ko",
+      "question": "1X Technologies의 NEO 로봇은 계단을 오르내릴 때 RGB 스테레오 비전을 사용하여 높이를 추정한다고 하는데, 이 기술이 다른 휴머노이드 로봇과 비교했을 때 어떤 장점을 제공하나요?",
+      "rank_scoped": 1,
+      "top1_scoped": "X2_P02_C02",
+      "rank_unfiltered": 1,
+      "top1_unfiltered": "X2_P02_C02"
+    },
+    {
+      "scope": "technology",
+      "company": "1x",
+      "answer": {
+        "source_id": "X2",
+        "page": 2
+      },
+      "lang": "en",
+      "question": "What advantages does the RGB stereo vision technology used by 1X Technologies' NEO robot for estimating stair heights offer compared to other humanoid robots?",
+      "rank_scoped": 1,
+      "top1_scoped": "X2_P02_C02",
+      "rank_unfiltered": 1,
+      "top1_unfiltered": "X2_P02_C02"
+    },
+    {
+      "scope": "technology",
+      "company": "1x",
+      "answer": {
+        "source_id": "X4",
+        "page": 1
+      },
+      "lang": "ko",
+      "question": "1X Technologies의 NEO 손은 인간 손의 어떤 특성을 모방하여 로봇의 조작 능력을 향상시키고 있나요?",
+      "rank_scoped": 5,
+      "top1_scoped": "X4_P03_C02",
+      "rank_unfiltered": 5,
+      "top1_unfiltered": "X4_P03_C02"
+    },
+    {
+      "scope": "technology",
+      "company": "1x",
+      "answer": {
+        "source_id": "X4",
+        "page": 1
+      },
+      "lang": "en",
+      "question": "What characteristics of human hands does 1X Technologies' NEO hands mimic to enhance the manipulation capabilities of robots?",
+      "rank_scoped": 2,
+      "top1_scoped": "X4_P03_C02",
+      "rank_unfiltered": 2,
+      "top1_unfiltered": "X4_P03_C02"
+    },
+    {
+      "scope": "technology",
+      "company": "apptronik",
+      "answer": {
+        "source_id": "A2",
+        "page": 1
+      },
+      "lang": "ko",
+      "question": "Apptronik의 Apollo 2 로봇이 다양한 고객 사례에서 수행하는 작업의 종류는 무엇인가요?",
+      "rank_scoped": 3,
+      "top1_scoped": "A2_P02_C01",
+      "rank_unfiltered": 3,
+      "top1_unfiltered": "A2_P02_C01"
+    },
+    {
+      "scope": "technology",
+      "company": "apptronik",
+      "answer": {
+        "source_id": "A2",
+        "page": 1
+      },
+      "lang": "en",
+      "question": "What types of tasks does Apptronik's Apollo 2 robot perform across various customer use cases?",
+      "rank_scoped": 3,
+      "top1_scoped": "A2_P02_C01",
+      "rank_unfiltered": 3,
+      "top1_unfiltered": "A2_P02_C01"
+    },
+    {
+      "scope": "technology",
+      "company": "apptronik",
+      "answer": {
+        "source_id": "A1",
+        "page": 2
+      },
+      "lang": "ko",
+      "question": "Apptronik의 Apollo 2는 로봇이 주변 환경을 인식하고 안전하게 작동하기 위해 어떤 기술적 특성을 갖추고 있나요?",
+      "rank_scoped": null,
+      "top1_scoped": "A1_P01_C01",
+      "rank_unfiltered": null,
+      "top1_unfiltered": "A1_P01_C01"
+    },
+    {
+      "scope": "technology",
+      "company": "apptronik",
+      "answer": {
+        "source_id": "A1",
+        "page": 2
+      },
+      "lang": "en",
+      "question": "What technical features does Apptronik's Apollo 2 have to ensure that the robot can perceive its environment and operate safely?",
+      "rank_scoped": 5,
+      "top1_scoped": "A2_P02_C01",
+      "rank_unfiltered": 5,
+      "top1_unfiltered": "A2_P02_C01"
+    },
+    {
+      "scope": "technology",
+      "company": "apptronik",
+      "answer": {
+        "source_id": "A4",
+        "page": 2
+      },
+      "lang": "ko",
+      "question": "Apptronik의 휴머노이드 로봇 Apollo는 TI의 어떤 기술을 활용하여 안전성과 성능을 보장하고 있나요?",
+      "rank_scoped": 2,
+      "top1_scoped": "A4_P01_C02",
+      "rank_unfiltered": 2,
+      "top1_unfiltered": "A4_P01_C02"
+    },
+    {
+      "scope": "technology",
+      "company": "apptronik",
+      "answer": {
+        "source_id": "A4",
+        "page": 2
+      },
+      "lang": "en",
+      "question": "What technologies does Apptronik's humanoid robot Apollo utilize from TI to ensure safety and performance?",
+      "rank_scoped": 2,
+      "top1_scoped": "A4_P01_C02",
+      "rank_unfiltered": 2,
+      "top1_unfiltered": "A4_P01_C02"
+    },
+    {
+      "scope": "technology",
+      "company": "apptronik",
+      "answer": {
+        "source_id": "A5",
+        "page": 1
+      },
+      "lang": "ko",
+      "question": "Apptronik의 Apollo 휴머노이드 로봇이 Jabil의 제조 환경에서 어떤 특정 작업을 수행하며, 이로 인해 고객에게 어떤 이점이 제공될까요?",
+      "rank_scoped": 1,
+      "top1_scoped": "A5_P01_C02",
+      "rank_unfiltered": 1,
+      "top1_unfiltered": "A5_P01_C02"
+    },
+    {
+      "scope": "technology",
+      "company": "apptronik",
+      "answer": {
+        "source_id": "A5",
+        "page": 1
+      },
+      "lang": "en",
+      "question": "What specific tasks will Apptronik's Apollo humanoid robots perform in Jabil's manufacturing environment, and what benefits will this provide to customers?",
+      "rank_scoped": 1,
+      "top1_scoped": "A5_P01_C01",
+      "rank_unfiltered": 1,
+      "top1_unfiltered": "A5_P01_C01"
+    },
+    {
+      "scope": "technology",
+      "company": "apptronik",
+      "answer": {
+        "source_id": "A3",
+        "page": 3
+      },
+      "lang": "ko",
+      "question": "Apptronik이 개발한 로봇이 인간과의 협업에서 안전성을 높이기 위해 어떤 기술적 특성을 갖추고 있는지 구체적으로 설명해 줄 수 있나요?",
+      "rank_scoped": null,
+      "top1_scoped": "A4_P01_C02",
+      "rank_unfiltered": null,
+      "top1_unfiltered": "A4_P01_C02"
+    },
+    {
+      "scope": "technology",
+      "company": "apptronik",
+      "answer": {
+        "source_id": "A3",
+        "page": 3
+      },
+      "lang": "en",
+      "question": "Can you explain the specific technological features that Apptronik's robots possess to enhance safety in collaboration with humans?",
+      "rank_scoped": null,
+      "top1_scoped": "A4_P01_C02",
+      "rank_unfiltered": null,
+      "top1_unfiltered": "A4_P01_C02"
+    },
+    {
+      "scope": "technology",
+      "company": "apptronik",
+      "answer": {
+        "source_id": "A1",
+        "page": 1
+      },
+      "lang": "ko",
+      "question": "Apptronik의 Apollo 2는 어떤 방식으로 에너지 효율성을 90% 이상 달성하고 있으며, 이는 실제 운영에서 어떤 이점을 제공하나요?",
+      "rank_scoped": 1,
+      "top1_scoped": "A1_P01_C01",
+      "rank_unfiltered": 1,
+      "top1_unfiltered": "A1_P01_C01"
+    },
+    {
+      "scope": "technology",
+      "company": "apptronik",
+      "answer": {
+        "source_id": "A1",
+        "page": 1
+      },
+      "lang": "en",
+      "question": "How does Apptronik's Apollo 2 achieve over 90% energy efficiency, and what advantages does this provide in real-world operations?",
+      "rank_scoped": 1,
+      "top1_scoped": "A1_P01_C01",
+      "rank_unfiltered": 1,
+      "top1_unfiltered": "A1_P01_C01"
+    },
+    {
+      "scope": "technology",
+      "company": "figure",
+      "answer": {
+        "source_id": "F1",
+        "page": 1
+      },
+      "lang": "ko",
+      "question": "Figure AI의 Figure 03 로봇은 가정에서의 안전성을 높이기 위해 어떤 구체적인 설계 개선 사항을 도입했나요?",
+      "rank_scoped": 1,
+      "top1_scoped": "F1_P01_C01",
+      "rank_unfiltered": 1,
+      "top1_unfiltered": "F1_P01_C01"
+    },
+    {
+      "scope": "technology",
+      "company": "figure",
+      "answer": {
+        "source_id": "F1",
+        "page": 1
+      },
+      "lang": "en",
+      "question": "What specific design improvements has Figure AI implemented in the Figure 03 robot to enhance safety in home environments?",
+      "rank_scoped": 4,
+      "top1_scoped": "F1_P02_C01",
+      "rank_unfiltered": 4,
+      "top1_unfiltered": "F1_P02_C01"
+    },
+    {
+      "scope": "technology",
+      "company": "figure",
+      "answer": {
+        "source_id": "F1",
+        "page": 2
+      },
+      "lang": "ko",
+      "question": "Figure AI의 Figure 03 로봇은 가정용으로 설계되었는데, 이 로봇의 배터리 안전성을 보장하기 위해 어떤 인증을 받았는지 궁금합니다.",
+      "rank_scoped": 1,
+      "top1_scoped": "F1_P02_C01",
+      "rank_unfiltered": 1,
+      "top1_unfiltered": "F1_P02_C01"
+    },
+    {
+      "scope": "technology",
+      "company": "figure",
+      "answer": {
+        "source_id": "F1",
+        "page": 2
+      },
+      "lang": "en",
+      "question": "What certification has Figure AI's Figure 03 robot achieved to ensure battery safety?",
+      "rank_scoped": 1,
+      "top1_scoped": "F1_P02_C01",
+      "rank_unfiltered": 1,
+      "top1_unfiltered": "F1_P02_C01"
+    },
+    {
+      "scope": "technology",
+      "company": "figure",
+      "answer": {
+        "source_id": "F2",
+        "page": 1
+      },
+      "lang": "ko",
+      "question": "Figure AI의 Helix 02는 전체 로봇을 제어하는 데 있어 어떤 기술적 혁신을 이루었으며, 이를 통해 수행할 수 있는 가장 복잡한 자율 작업은 무엇인가요?",
+      "rank_scoped": 1,
+      "top1_scoped": "F2_P01_C01",
+      "rank_unfiltered": 1,
+      "top1_unfiltered": "F2_P01_C01"
+    },
+    {
+      "scope": "technology",
+      "company": "figure",
+      "answer": {
+        "source_id": "F2",
+        "page": 1
+      },
+      "lang": "en",
+      "question": "What technological innovations has Figure AI's Helix 02 achieved in controlling the entire robot, and what is the most complex autonomous task it can perform?",
+      "rank_scoped": 1,
+      "top1_scoped": "F2_P01_C01",
+      "rank_unfiltered": 1,
+      "top1_unfiltered": "F2_P01_C01"
+    },
+    {
+      "scope": "technology",
+      "company": "figure",
+      "answer": {
+        "source_id": "F4",
+        "page": 1
+      },
+      "lang": "ko",
+      "question": "Figure AI의 로봇이 BMW에서 30,000대의 차량 생산에 기여한 과정에서, 로봇의 사이클 타임과 배치 정확도 목표는 각각 얼마였나요?",
+      "rank_scoped": 1,
+      "top1_scoped": "F4_P01_C01",
+      "rank_unfiltered": 1,
+      "top1_unfiltered": "F4_P01_C01"
+    },
+    {
+      "scope": "technology",
+      "company": "figure",
+      "answer": {
+        "source_id": "F4",
+        "page": 1
+      },
+      "lang": "en",
+      "question": "What were the cycle time and placement accuracy targets for Figure AI's robots during their contribution to the production of 30,000 vehicles at BMW?",
+      "rank_scoped": 1,
+      "top1_scoped": "F4_P01_C01",
+      "rank_unfiltered": 1,
+      "top1_unfiltered": "F4_P01_C01"
+    },
+    {
+      "scope": "technology",
+      "company": "figure",
+      "answer": {
+        "source_id": "F3",
+        "page": 3
+      },
+      "lang": "ko",
+      "question": "Figure AI의 Helix 2.5가 30개의 새로운 환경에서 얼마나 효과적으로 일반화되었는지에 대한 구체적인 성공률은 얼마인가요?",
+      "rank_scoped": 3,
+      "top1_scoped": "F3_P01_C01",
+      "rank_unfiltered": 3,
+      "top1_unfiltered": "F3_P01_C01"
+    },
+    {
+      "scope": "technology",
+      "company": "figure",
+      "answer": {
+        "source_id": "F3",
+        "page": 3
+      },
+      "lang": "en",
+      "question": "What is the specific success rate of Figure AI's Helix 2.5 in generalizing across 30 new environments?",
+      "rank_scoped": 1,
+      "top1_scoped": "F3_P03_C02",
+      "rank_unfiltered": 1,
+      "top1_unfiltered": "F3_P03_C02"
+    },
+    {
+      "scope": "technology",
+      "company": "figure",
+      "answer": {
+        "source_id": "F5",
+        "page": 1
+      },
+      "lang": "ko",
+      "question": "Figure AI의 Figure 03 로봇이 BMW의 조립 라인에서 수행하는 물류 작업의 복잡성을 해결하기 위해 어떤 기술적 특징이 적용되었는지 구체적으로 설명해 줄 수 있나요?",
+      "rank_scoped": 1,
+      "top1_scoped": "F5_P01_C01",
+      "rank_unfiltered": 1,
+      "top1_unfiltered": "F5_P01_C01"
+    },
+    {
+      "scope": "technology",
+      "company": "figure",
+      "answer": {
+        "source_id": "F5",
+        "page": 1
+      },
+      "lang": "en",
+      "question": "Can you explain the specific technological features implemented in Figure AI's Figure 03 robot to address the complexities of logistics tasks on BMW's assembly line?",
+      "rank_scoped": 1,
+      "top1_scoped": "F5_P01_C01",
+      "rank_unfiltered": 1,
+      "top1_unfiltered": "F5_P01_C01"
+    },
+    {
+      "scope": "industry",
+      "company": null,
+      "answer": {
+        "source_id": "M7",
+        "page": 46
+      },
+      "lang": "ko",
+      "question": "현재의 휴머노이드 시스템이 복잡한 환경에서의 의사결정 능력에 있어 어떤 한계를 보이고 있는지 구체적인 사례를 들어 설명해 줄 수 있나요?",
+      "rank_scoped": null,
+      "top1_scoped": "M5_P09_C02",
+      "rank_unfiltered": null,
+      "top1_unfiltered": "F2_P01_C02"
+    },
+    {
+      "scope": "industry",
+      "company": null,
+      "answer": {
+        "source_id": "M7",
+        "page": 46
+      },
+      "lang": "en",
+      "question": "Can you provide specific examples of the limitations that current humanoid systems exhibit in their decision-making abilities within complex environments?",
+      "rank_scoped": 3,
+      "top1_scoped": "M4_P09_C01",
+      "rank_unfiltered": 5,
+      "top1_unfiltered": "F2_P01_C02"
+    },
+    {
+      "scope": "industry",
+      "company": null,
+      "answer": {
+        "source_id": "M4",
+        "page": 1
+      },
+      "lang": "ko",
+      "question": "휴머노이드 로봇이 상업적으로 성공하기 위해 필요한 기술적 발전이나 시장의 변화는 무엇인가요?",
+      "rank_scoped": null,
+      "top1_scoped": "M6_P03_C03",
+      "rank_unfiltered": null,
+      "top1_unfiltered": "M6_P03_C03"
+    },
+    {
+      "scope": "industry",
+      "company": null,
+      "answer": {
+        "source_id": "M4",
+        "page": 1
+      },
+      "lang": "en",
+      "question": "What technological advancements or market changes are necessary for humanoid robots to achieve commercial success?",
+      "rank_scoped": null,
+      "top1_scoped": "M6_P03_C03",
+      "rank_unfiltered": null,
+      "top1_unfiltered": "M6_P03_C03"
+    },
+    {
+      "scope": "industry",
+      "company": null,
+      "answer": {
+        "source_id": "M7",
+        "page": 44
+      },
+      "lang": "ko",
+      "question": "현재 로봇 시스템의 조작 능력 수준이 2라고 했는데, 이는 어떤 특정 작업에서의 성과를 기준으로 한 것인가? 예를 들어, 어떤 종류의 작업이 포함되며, 이 작업들이 수행되는 환경은 어떤 특징을 가지고 있는가?",
+      "rank_scoped": 1,
+      "top1_scoped": "M7_P44_C02",
+      "rank_unfiltered": 1,
+      "top1_unfiltered": "M7_P44_C02"
+    },
+    {
+      "scope": "industry",
+      "company": null,
+      "answer": {
+        "source_id": "M7",
+        "page": 44
+      },
+      "lang": "en",
+      "question": "The current state-of-the-art robotic systems for manipulation are rated at level 2. What specific tasks are used as benchmarks for this rating, and what characteristics do the environments in which these tasks are performed have?",
+      "rank_scoped": 1,
+      "top1_scoped": "M7_P44_C02",
+      "rank_unfiltered": 1,
+      "top1_unfiltered": "M7_P44_C02"
+    },
+    {
+      "scope": "industry",
+      "company": null,
+      "answer": {
+        "source_id": "M5",
+        "page": 14
+      },
+      "lang": "ko",
+      "question": "현재 휴머노이드 로봇의 생산에 있어 주요 기업들이 협력하고 있는 부품 공급업체는 어디인가요?",
+      "rank_scoped": 3,
+      "top1_scoped": "M5_P13_C03",
+      "rank_unfiltered": 4,
+      "top1_unfiltered": "M5_P13_C03"
+    },
+    {
+      "scope": "industry",
+      "company": null,
+      "answer": {
+        "source_id": "M5",
+        "page": 14
+      },
+      "lang": "en",
+      "question": "Which component suppliers are currently collaborating with major companies in the production of humanoid robots?",
+      "rank_scoped": 1,
+      "top1_scoped": "M5_P14_C01",
+      "rank_unfiltered": 1,
+      "top1_unfiltered": "M5_P14_C01"
+    },
+    {
+      "scope": "industry",
+      "company": null,
+      "answer": {
+        "source_id": "M4",
+        "page": 4
+      },
+      "lang": "ko",
+      "question": "휴머노이드 로봇이 실제 작업 환경에서 전환 없이 전체 근무 시간을 보장하기 위해 필요한 배터리 교체 또는 충전 인프라의 구체적인 요구 사항은 무엇인가요?",
+      "rank_scoped": 3,
+      "top1_scoped": "M4_P03_C02",
+      "rank_unfiltered": 3,
+      "top1_unfiltered": "M4_P03_C02"
+    },
+    {
+      "scope": "industry",
+      "company": null,
+      "answer": {
+        "source_id": "M4",
+        "page": 4
+      },
+      "lang": "en",
+      "question": "What are the specific requirements for battery swapping or charging infrastructure that humanoid robots need to ensure guaranteed shift coverage in real work environments?",
+      "rank_scoped": 1,
+      "top1_scoped": "M4_P04_C01",
+      "rank_unfiltered": 1,
+      "top1_unfiltered": "M4_P04_C01"
+    },
+    {
+      "scope": "industry",
+      "company": null,
+      "answer": {
+        "source_id": "M6",
+        "page": 3
+      },
+      "lang": "ko",
+      "question": "현재 상용화된 휴머노이드 로봇의 주요 기능은 무엇이며, 이들이 수행할 수 있는 작업의 범위는 어떻게 되나요?",
+      "rank_scoped": null,
+      "top1_scoped": "M6_P02_C02",
+      "rank_unfiltered": null,
+      "top1_unfiltered": "M6_P02_C02"
+    },
+    {
+      "scope": "industry",
+      "company": null,
+      "answer": {
+        "source_id": "M6",
+        "page": 3
+      },
+      "lang": "en",
+      "question": "What are the key functionalities of commercially available humanoid robots, and what range of tasks can they perform?",
+      "rank_scoped": 3,
+      "top1_scoped": "M4_P04_C02",
+      "rank_unfiltered": 3,
+      "top1_unfiltered": "M4_P04_C02"
+    },
+    {
+      "scope": "industry",
+      "company": null,
+      "answer": {
+        "source_id": "M4",
+        "page": 11
+      },
+      "lang": "ko",
+      "question": "Unitree의 휴머노이드 로봇이 가격이 10,000달러 이하로 책정되었지만, 안전 기능과 적재 용량이 제한적이라는 점을 고려할 때, 이 로봇이 산업 현장에서 실제로 사용되기 위해 해결해야 할 주요 기술적 과제는 무엇인가요?",
+      "rank_scoped": null,
+      "top1_scoped": "M4_P05_C01",
+      "rank_unfiltered": null,
+      "top1_unfiltered": "M4_P05_C01"
+    },
+    {
+      "scope": "industry",
+      "company": null,
+      "answer": {
+        "source_id": "M4",
+        "page": 11
+      },
+      "lang": "en",
+      "question": "Considering that Unitree's humanoid robots are priced under $10,000 but have limited safety features and payload capacity, what are the key technical challenges that need to be addressed for these robots to be effectively used in industrial settings?",
+      "rank_scoped": null,
+      "top1_scoped": "M4_P03_C02",
+      "rank_unfiltered": null,
+      "top1_unfiltered": "M4_P03_C02"
+    },
+    {
+      "scope": "industry",
+      "company": null,
+      "answer": {
+        "source_id": "M3",
+        "page": 13
+      },
+      "lang": "ko",
+      "question": "휴머노이드 로봇의 생산 비용 절감이 이루어지기 위해서는 어떤 주요 요소들이 필요하며, 이 요소들이 현재의 기술적 한계에 어떻게 영향을 미치고 있는가?",
+      "rank_scoped": 5,
+      "top1_scoped": "M4_P02_C01",
+      "rank_unfiltered": 5,
+      "top1_unfiltered": "M4_P02_C01"
+    },
+    {
+      "scope": "industry",
+      "company": null,
+      "answer": {
+        "source_id": "M3",
+        "page": 13
+      },
+      "lang": "en",
+      "question": "What key factors are necessary for the reduction of production costs in humanoid robots, and how do these factors currently impact the existing technological limitations?",
+      "rank_scoped": null,
+      "top1_scoped": "M5_P02_C01",
+      "rank_unfiltered": null,
+      "top1_unfiltered": "M5_P02_C01"
+    },
+    {
+      "scope": "industry",
+      "company": null,
+      "answer": {
+        "source_id": "M5",
+        "page": 15
+      },
+      "lang": "ko",
+      "question": "휴머노이드 로봇의 안전성과 인증을 위해 공급업체가 어떤 구체적인 기능 안전 능력을 구축해야 하는가?",
+      "rank_scoped": 1,
+      "top1_scoped": "M5_P15_C01",
+      "rank_unfiltered": 1,
+      "top1_unfiltered": "M5_P15_C01"
+    },
+    {
+      "scope": "industry",
+      "company": null,
+      "answer": {
+        "source_id": "M5",
+        "page": 15
+      },
+      "lang": "en",
+      "question": "What specific functional safety capabilities should suppliers build to ensure safety and certification for humanoid robots?",
+      "rank_scoped": 1,
+      "top1_scoped": "M5_P15_C01",
+      "rank_unfiltered": 1,
+      "top1_unfiltered": "M5_P15_C01"
+    },
+    {
+      "scope": "industry",
+      "company": null,
+      "answer": {
+        "source_id": "M3",
+        "page": 14
+      },
+      "lang": "ko",
+      "question": "현재 중국 제조업에서 자동화 솔루션이 차지하는 비율은 얼마이며, 이는 휴머노이드 로봇의 도입에 어떤 영향을 미칠 것으로 예상되는가?",
+      "rank_scoped": 2,
+      "top1_scoped": "M3_P03_C02",
+      "rank_unfiltered": 2,
+      "top1_unfiltered": "M3_P03_C02"
+    },
+    {
+      "scope": "industry",
+      "company": null,
+      "answer": {
+        "source_id": "M3",
+        "page": 14
+      },
+      "lang": "en",
+      "question": "What percentage of automation solutions currently accounts for the manufacturing sector in China, and how is this expected to influence the adoption of humanoid robots?",
+      "rank_scoped": 1,
+      "top1_scoped": "M3_P14_C01",
+      "rank_unfiltered": 1,
+      "top1_unfiltered": "M3_P14_C01"
+    },
+    {
+      "scope": "industry",
+      "company": null,
+      "answer": {
+        "source_id": "M3",
+        "page": 9
+      },
+      "lang": "ko",
+      "question": "2023년 로봇 LLM 개발에서 RT-2의 주요 기능은 무엇이며, 이를 통해 어떤 작업을 수행할 수 있는가?",
+      "rank_scoped": 1,
+      "top1_scoped": "M3_P09_C01",
+      "rank_unfiltered": 1,
+      "top1_unfiltered": "M3_P09_C01"
+    },
+    {
+      "scope": "industry",
+      "company": null,
+      "answer": {
+        "source_id": "M3",
+        "page": 9
+      },
+      "lang": "en",
+      "question": "What are the key features of RT-2 developed in 2023, and what tasks can it perform as a result?",
+      "rank_scoped": 1,
+      "top1_scoped": "M3_P09_C01",
+      "rank_unfiltered": 1,
+      "top1_unfiltered": "M3_P09_C01"
+    },
+    {
+      "scope": "industry",
+      "company": null,
+      "answer": {
+        "source_id": "M2",
+        "page": 6
+      },
+      "lang": "ko",
+      "question": "2025년 동안 판매된 휴머노이드 로봇의 수치는 얼마이며, 이 시장의 주요 제조업체들은 어떤 지역에 본사를 두고 있는가?",
+      "rank_scoped": null,
+      "top1_scoped": "M3_P03_C02",
+      "rank_unfiltered": null,
+      "top1_unfiltered": "M3_P03_C02"
+    },
+    {
+      "scope": "industry",
+      "company": null,
+      "answer": {
+        "source_id": "M2",
+        "page": 6
+      },
+      "lang": "en",
+      "question": "What was the number of humanoid robots sold in 2025, and which region do the majority of the key manufacturers originate from?",
+      "rank_scoped": 1,
+      "top1_scoped": "M2_P06_C01",
+      "rank_unfiltered": 1,
+      "top1_unfiltered": "M2_P06_C01"
+    },
+    {
+      "scope": "industry",
+      "company": null,
+      "answer": {
+        "source_id": "M3",
+        "page": 4
+      },
+      "lang": "ko",
+      "question": "휴머노이드 로봇의 출하량이 2031년까지 100만 대에 이를 것으로 예상되는 이유는 무엇인가요?",
+      "rank_scoped": 2,
+      "top1_scoped": "M3_P03_C01",
+      "rank_unfiltered": 2,
+      "top1_unfiltered": "M3_P03_C01"
+    },
+    {
+      "scope": "industry",
+      "company": null,
+      "answer": {
+        "source_id": "M3",
+        "page": 4
+      },
+      "lang": "en",
+      "question": "What are the reasons behind the expectation that humanoid robot shipments will reach 1 million units by 2031?",
+      "rank_scoped": 3,
+      "top1_scoped": "M3_P03_C01",
+      "rank_unfiltered": 3,
+      "top1_unfiltered": "M3_P03_C01"
+    },
+    {
+      "scope": "industry",
+      "company": null,
+      "answer": {
+        "source_id": "M5",
+        "page": 9
+      },
+      "lang": "ko",
+      "question": "휴머노이드 로봇의 생산에 필요한 여섯 축 힘/토크 센서의 공급망에서 어떤 특정한 위험 요소가 존재하며, 이로 인해 생산에 미치는 영향은 무엇인가요?",
+      "rank_scoped": 1,
+      "top1_scoped": "M5_P09_C01",
+      "rank_unfiltered": 1,
+      "top1_unfiltered": "M5_P09_C01"
+    },
+    {
+      "scope": "industry",
+      "company": null,
+      "answer": {
+        "source_id": "M5",
+        "page": 9
+      },
+      "lang": "en",
+      "question": "What specific risk factors exist in the supply chain of six-axis force/torque sensors required for humanoid robot production, and how do they impact production?",
+      "rank_scoped": 1,
+      "top1_scoped": "M5_P09_C01",
+      "rank_unfiltered": 1,
+      "top1_unfiltered": "M5_P09_C01"
+    }
+  ]
+}
