@@ -108,7 +108,7 @@ initialize_state
    ```
 2. **자기 파일만 수정.** `core/state.py`, `evaluation/criteria.py` 같은 공통 파일은 팀에 말하고 수정
 3. **출력은 `core/state.py`의 형식 그대로** (`AnalysisResult`, `InvestmentResult` 등)
-4. **검색 질의는 영어로** (영어 질의 Hit@5 0.875 vs 한국어 0.719)
+4. **검색 질의는 한국어·영어 모두 가능.** 한국어 질의는 검색 함수가 자동으로 영어로 번역합니다 (한국어 질의 Hit@5 0.719 → 0.938)
 5. **점수 합산과 INVEST/HOLD 판정은 LLM이 아니라 `evaluation.criteria.decide()`**
 
 ### 검색 함수 (`rag/retriever.py`)
@@ -122,7 +122,8 @@ docs = search_industry("manipulation capability level", document_type="capabilit
 evidence = [to_evidence(d) for d in docs]                               # → EvidenceItem
 ```
 
-- 결과마다 `d.metadata["chunk_id"]`(예: `F4_P02_C01`), `page`, `title`, `score`가 들어 있습니다.
+- 결과마다 `d.metadata["chunk_id"]`(예: `F4_P02_C01`), `page`, `title`, `score`, `search_query`(실제 검색어)가 들어 있습니다.
+- 한국어 질의는 `gpt-4o-mini`로 번역한 뒤 검색합니다 (질의당 약 120 토큰, 1초, 같은 질의는 캐싱). 끄려면 `translate=False`.
 - **유사도 점수로 관련성을 판단하지 마세요.** e5 모델은 관련 없는 문장도 0.7 이상이 나옵니다. 관련성은 LLM으로 평가합니다.
 
 ### 참고할 교수님 노트북 (`langgraph-v1/20-RAG`)
@@ -190,5 +191,5 @@ uv run python -m rag.evaluate run         # 검색 성능 재측정
 - Framework : LangGraph
 - LLM/Generator : gpt-4o-mini
 - LLM/Judge : gpt-4o-mini
-- Retrieval : Chroma - Hit Rate@5 0.797, MRR@5 0.603 (문서 기반 질문 64개, Agent별 검색 범위 적용)
+- Retrieval : Chroma - Hit Rate@5 0.906, MRR@5 0.667 (문서 기반 질문 64개, Agent별 검색 범위 적용, 한국어 질의 자동 번역)
 - Embedding : intfloat/multilingual-e5-base (gte-multilingual-base와 비교 후 선정, `rag/eval/embedding_comparison.json`)

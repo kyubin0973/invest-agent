@@ -111,13 +111,13 @@ def cmd_make_qa(args: argparse.Namespace) -> None:
 # ---------------------------------------------------------------------------
 # 측정
 # ---------------------------------------------------------------------------
-def retrieve(qa: dict, mode: str, k: int):
+def retrieve(qa: dict, mode: str, k: int, translate: bool = True):
     """mode=scoped: Agent가 실제로 쓰는 범위 / mode=unfiltered: 메타데이터 필터 없이 전체 검색."""
     if mode == "unfiltered":
-        return search(qa["question"], k=k)
+        return search(qa["question"], k=k, translate=translate)
     if qa["scope"] == "technology":
-        return search_technology(qa["question"], qa["company"], k=k)
-    return search_industry(qa["question"], k=k)
+        return search_technology(qa["question"], qa["company"], k=k, translate=translate)
+    return search_industry(qa["question"], k=k, translate=translate)
 
 
 def rank_of(qa: dict, docs) -> int | None:
@@ -140,12 +140,16 @@ def summarize(ranks: list[int | None]) -> dict:
 def cmd_run(args: argparse.Namespace) -> None:
     qa_set = json.loads(QA_PATH.read_text(encoding="utf-8"))
     k = max(KS)
+    translate = not args.no_translate
+    results_path = RESULTS_PATH if translate else RESULTS_PATH.with_name("results_no_translate.json")
+    print(f"한국어 질의 자동 번역: {'켜짐' if translate else '꺼짐'}")
 
     per_question = []
     for qa in qa_set:
         row = {**qa}
         for mode in ("scoped", "unfiltered"):
-            docs = retrieve(qa, mode, k)
+            docs = retrieve(qa, mode, k, translate)
+            row["search_query"] = docs[0].metadata["search_query"] if docs else qa["question"]
             row[f"rank_{mode}"] = rank_of(qa, docs)
             row[f"top1_{mode}"] = docs[0].metadata["chunk_id"] if docs else None
         per_question.append(row)
@@ -175,15 +179,20 @@ def cmd_run(args: argparse.Namespace) -> None:
     for q in misses:
         print(f"  - [{q['answer']['source_id']} p.{q['answer']['page']}] ({q['lang']}) {q['question']}  → top1 {q['top1_scoped']}")
 
-    RESULTS_PATH.write_text(
+    results_path.write_text(
         json.dumps(
-            {"measured_at": time.strftime("%Y-%m-%d %H:%M"), "summary": summary, "per_question": per_question},
+            {
+                "measured_at": time.strftime("%Y-%m-%d %H:%M"),
+                "translate_korean_query": translate,
+                "summary": summary,
+                "per_question": per_question,
+            },
             ensure_ascii=False,
             indent=2,
         ),
         encoding="utf-8",
     )
-    print(f"\n상세 결과: {RESULTS_PATH.relative_to(ROOT)}")
+    print(f"\n상세 결과: {results_path.relative_to(ROOT)}")
 
 
 # ---------------------------------------------------------------------------
@@ -313,6 +322,7 @@ def main() -> None:
     mq.set_defaults(func=cmd_make_qa)
 
     run = sub.add_parser("run", help="Hit Rate@K, MRR 측정")
+    run.add_argument("--no-translate", action="store_true", help="한국어 질의 자동 번역 없이 측정")
     run.set_defaults(func=cmd_run)
 
     cmp = sub.add_parser("compare", help="임베딩 모델 비교")
