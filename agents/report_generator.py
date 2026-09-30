@@ -8,7 +8,7 @@ import os
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, KeepInFrame
 from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
@@ -153,6 +153,48 @@ def _coverage(result: dict) -> str:
     return f"{n_scored}/12 ({cov:.0%})"
 
 
+# ---------------------------------------------------------------------------
+# 5쪽 고정: 섹션마다 한 쪽에 맞추고(KeepInFrame shrink), 글자가 너무 작아지지 않게 긴 목록은 미리 자른다
+# ---------------------------------------------------------------------------
+REPORT_PAGES = 5
+MAX_FINDINGS = 6  # 기업별 분석 문장 수
+MAX_LIST_ITEMS = 4  # 리스크·실사 항목 수
+MAX_TEXT_CHARS = 220  # 문장 하나의 최대 길이
+
+
+def _short(text, limit: int = MAX_TEXT_CHARS) -> str:
+    text = " ".join(str(text or "").split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _join(items, empty: str, limit: int = MAX_LIST_ITEMS) -> str:
+    items = [_short(i, 120) for i in (items or []) if i]
+    if not items:
+        return empty
+    more = f" 외 {len(items) - limit}건" if len(items) > limit else ""
+    return "; ".join(items[:limit]) + more
+
+
+def _fit_pages(story: list, width: float, height: float) -> list:
+    """PageBreak로 나뉜 섹션을 각각 한 쪽 크기에 맞춰 줄인다 → 섹션 수 = 쪽 수."""
+    pages, current = [], []
+    for flowable in story:
+        if isinstance(flowable, PageBreak):
+            pages.append(current)
+            current = []
+        else:
+            current.append(flowable)
+    pages.append(current)
+    if len(pages) != REPORT_PAGES:
+        raise ValueError(f"보고서 섹션이 {len(pages)}개입니다. {REPORT_PAGES}쪽 구성이어야 합니다.")
+    fitted = []
+    for i, content in enumerate(pages):
+        if i:
+            fitted.append(PageBreak())
+        fitted.append(KeepInFrame(width, height, content, mode="shrink"))
+    return fitted
+
+
 def _render_markdown(state: InvestmentState, references: list[ReferenceItem]) -> str:
     return "# Markdown Report Generated"
 
@@ -272,8 +314,8 @@ def generate_pdf_report(state: InvestmentState, references: list[ReferenceItem],
     for c in companies:
         r = results.get(c, {})
         d_reason = r.get("decision_reason", "판단 사유 미기재")
-        strengths = ", ".join(r.get("key_strengths", []))
-        risks = ", ".join(r.get("key_risks", []))
+        strengths = _join(r.get("key_strengths"), "-", 3)
+        risks = _join(r.get("key_risks"), "-", 3)
         block = (
             f"<b>• {c}</b> : {d_reason}<br/>"
             f"&nbsp;&nbsp;&nbsp;&nbsp;<font color='#1E40AF'><b>[핵심 강점]</b></font> {strengths}<br/>"
@@ -318,13 +360,13 @@ def generate_pdf_report(state: InvestmentState, references: list[ReferenceItem],
         t = tech.get(c, {})
         content_p = []
         content_p.append(Paragraph(f"<b><font size='9' color='#1E3A8A'>{c}</font></b>", body_style))
-        content_p.append(Paragraph(f"• <b>기술·제품 핵심 컨셉:</b> {t.get('summary', '분석 데이터 없음')}", bullet_style))
+        content_p.append(Paragraph(f"• <b>기술·제품 핵심 컨셉:</b> {_short(t.get('summary') or '분석 데이터 없음')}", bullet_style))
         
-        for f in t.get("findings", []):
-            content_p.append(Paragraph(f"• <b>{f.get('dimension')}:</b> {f.get('statement')}", bullet_style))
+        for f in t.get("findings", [])[:MAX_FINDINGS]:
+            content_p.append(Paragraph(f"• <b>{f.get('dimension')}:</b> {_short(f.get('statement'))}", bullet_style))
             
-        r_str = ", ".join(t.get("risks", [])) or "특이 리스크 없음"
-        m_str = ", ".join(t.get("missing_information", [])) or "추가 실사 항목 없음"
+        r_str = _join(t.get("risks"), "특이 리스크 없음")
+        m_str = _join(t.get("missing_information"), "추가 실사 항목 없음")
         content_p.append(Paragraph(f"• <font color='#991B1B'><b>기술 리스크 및 한계점:</b></font> {r_str}", bullet_style))
         content_p.append(Paragraph(f"• <font color='#4B5563'><b>실사 필요 사항 (Due Diligence):</b></font> {m_str}", bullet_style))
 
@@ -349,13 +391,13 @@ def generate_pdf_report(state: InvestmentState, references: list[ReferenceItem],
         m = market.get(c, {})
         content_p = []
         content_p.append(Paragraph(f"<b><font size='9' color='#1E3A8A'>{c}</font></b>", body_style))
-        content_p.append(Paragraph(f"• <b>시장 견인력 및 사업화 실적:</b> {m.get('summary', '분석 데이터 없음')}", bullet_style))
+        content_p.append(Paragraph(f"• <b>시장 견인력 및 사업화 실적:</b> {_short(m.get('summary') or '분석 데이터 없음')}", bullet_style))
         
-        for f in m.get("findings", []):
-            content_p.append(Paragraph(f"• <b>{f.get('dimension')}:</b> {f.get('statement')}", bullet_style))
+        for f in m.get("findings", [])[:MAX_FINDINGS]:
+            content_p.append(Paragraph(f"• <b>{f.get('dimension')}:</b> {_short(f.get('statement'))}", bullet_style))
             
-        r_str = ", ".join(m.get("risks", [])) or "특이 리스크 없음"
-        m_str = ", ".join(m.get("missing_information", [])) or "정보 완전"
+        r_str = _join(m.get("risks"), "특이 리스크 없음")
+        m_str = _join(m.get("missing_information"), "정보 완전")
         content_p.append(Paragraph(f"• <font color='#991B1B'><b>시장·사업화 리스크:</b></font> {r_str}", bullet_style))
         content_p.append(Paragraph(f"• <font color='#4B5563'><b>팀 구성 및 비공개 정보 한계:</b></font> {m_str}", bullet_style))
 
@@ -474,7 +516,8 @@ def generate_pdf_report(state: InvestmentState, references: list[ReferenceItem],
     else:
         story.append(Paragraph("• 평가에 사용된 검증 Reference가 없습니다.", body_style))
 
-    doc.build(story, canvasmaker=InvestmentReportCanvas)
+    # 프레임 안쪽 여백(상하좌우 6pt)을 뺀 크기에 섹션을 맞춘다
+    doc.build(_fit_pages(story, doc.width - 12, doc.height - 12), canvasmaker=InvestmentReportCanvas)
     return output_path
 
 
