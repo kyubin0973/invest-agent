@@ -1,7 +1,8 @@
 """투자 판단 기준 (설계 산출물 3장)
 
 Bessemer 핵심 질문 10개를 범용 휴머노이드에 맞게 구체화하고, 휴머노이드 특화 2개 문항을 추가한 12문항.
-- 모든 문항은 동일 중요도 (가중치 없음). Investment Judge가 1~5점 또는 N/A로 판단한다.
+- 모든 문항은 동일 중요도 (가중치 없음). Investment Judge가 1~5점 척도 중 1·3·5점 또는 N/A로 판단한다.
+  (2·4점은 경계가 모호해 사용하지 않는다)
 - 식별자: Bessemer 문항 B01~B10, 휴머노이드 특화 문항 H11~H12 (Q1~Q12와 일대일)
 - 점수 부여 책임은 모두 Investment Judge에 있다. Analysis Agent는 근거를 제공하며
   공개 Team·Founder·가격 정보가 부족하면 추정하지 않고 N/A로 처리한다.
@@ -138,15 +139,19 @@ EVIDENCE_LEVEL_RULE = (
     "Evidence Level은 근거의 검증 수준이며 점수로 자동 변환하지 않는다."
 )
 
+ALLOWED_SCORES = (1, 3, 5)
+
 SCORE_RUBRIC = {
-    5: "강한 복수 근거·외부검증 (운영·배치 문항은 반복 실적까지 확인)",
-    4: "충분한 긍정 근거와 외부검증 (운영·배치 문항은 실제 적용 근거 확인)",
-    3: "초기단계·기업자료 중심·검증범위 제한, 또는 긍정·부정 근거 혼재",
-    2: "자료 부족이 아니라 실제 근거에서 실질적 약점 확인",
-    1: "높은 검증 수준의 근거에서 중대한 부정 요인 확인",
+    5: "해당 문항을 지지하는 외부 검증 근거(E3 이상)가 있음. 운영·배치 문항은 실제 적용 또는 반복 실적까지 확인됨",
+    3: "긍정 신호는 있으나 기업자료(E1~E2) 중심이거나 검증범위가 제한적임. 또는 긍정·부정 근거가 혼재함",
+    1: "자료 부족이 아니라 실제 근거에서 실질적인 약점 또는 부정 요인이 확인됨",
     None: "N/A - 판단 근거 부족 (0점이나 1점으로 계산하지 않음)",
 }
-SCORE_RULE = "Missing Evidence ≠ Negative Evidence. Q9 Risk도 점수가 높을수록 Risk가 관리 가능하다는 긍정 방향이다."
+SCORE_RULE = (
+    "Missing Evidence ≠ Negative Evidence. 근거가 없으면 1점이 아니라 N/A이다. "
+    "약점과 강점이 섞여 있으면 3점이며, 1점은 확인된 실질적 약점에만 쓴다. "
+    "Q9 Risk도 점수가 높을수록 Risk가 관리 가능하다는 긍정 방향이다."
+)
 
 CONFIDENCE_LEVELS = {
     "High": "복수 독립 근거와 외부검증 또는 운영 결과 존재",
@@ -157,7 +162,9 @@ CONFIDENCE_LEVELS = {
 # ---------------------------------------------------------------------------
 # 계산과 최종 판단 규칙 (설계 3.4) - Prototype 운영 기준이며 업계 표준으로 주장하지 않는다
 # ---------------------------------------------------------------------------
-INVEST_SCORE_THRESHOLD = 3.5  # Rubric 3점(Partially Supported)과 4점(Supported)의 경계
+# 1·3·5 척도에서 3.5는 '기업자료 중심(3점)'을 넘어 외부 검증된 강점(5점)이 충분해야 넘는 기준이다.
+# 예) 12문항: 5점 3개 + 3점 9개 = 평균 3.5 → INVEST / 9문항: 5점 2개 + 3점 7개 = 평균 3.44 → HOLD
+INVEST_SCORE_THRESHOLD = 3.5
 MIN_SCORED_CRITERIA = 9  # Coverage 70% 이상 = 12문항 중 최소 9개 (9/12 = 75.0%)
 
 
@@ -172,7 +179,9 @@ def validate_criteria(criteria: list[dict], available_evidence: dict[str, dict])
     - 문항 완전성: 12문항이 각 1개씩. 누락 문항은 INSUFFICIENT_EVIDENCE / score=None으로 채운다.
     - Evidence ID: 앞선 Agent가 실제 검색해 전달한 Evidence(available_evidence, chunk_id → EvidenceItem)에
       존재하고 source_id가 일치하는 참조만 남긴다. LLM이 쓴 Metadata 대신 원본 EvidenceItem을 연결한다.
-    - score/status: SCORED면 정수 1~5, INSUFFICIENT_EVIDENCE면 None.
+    - score/status: SCORED면 1·3·5 중 하나, INSUFFICIENT_EVIDENCE면 None.
+      허용되지 않은 점수(2·4점 등)는 '형식 오류'로 기록해 근거 부족과 구분한다.
+      이 처리는 최후의 안전장치이며, Judge는 출력 형식을 1·3·5로 제한하고 형식 오류 문항은 재평가한 뒤 호출한다.
       유효 Evidence가 남지 않거나 규칙에 맞지 않으면 None / INSUFFICIENT_EVIDENCE로 바꾸고 사유를 기록한다.
 
     criteria 항목의 evidence는 [{"chunk_id", "source_id"}] 참조 또는 EvidenceItem이어도 된다.
@@ -193,14 +202,14 @@ def validate_criteria(criteria: list[dict], available_evidence: dict[str, dict])
                 evidence.append(item)
 
         score, status = raw.get("score"), raw.get("status")
-        valid_score = isinstance(score, int) and not isinstance(score, bool) and 1 <= score <= 5
+        valid_score = isinstance(score, int) and not isinstance(score, bool) and score in ALLOWED_SCORES
         reason = None
         if status == "SCORED" and not valid_score:
-            reason = f"유효하지 않은 점수: {score!r}"
+            reason = f"형식 오류: 허용되지 않은 점수 {score!r} (허용: 1, 3, 5)"
         elif status == "SCORED" and not evidence:
             reason = "검증된 Evidence가 없음"
         elif status not in ("SCORED", "INSUFFICIENT_EVIDENCE"):
-            reason = f"유효하지 않은 status: {status!r}"
+            reason = f"형식 오류: 허용되지 않은 status {status!r}"
 
         if reason or status == "INSUFFICIENT_EVIDENCE":
             validated.append({
@@ -237,9 +246,9 @@ def _insufficient(crit: Criterion, reason: str | None) -> dict:
 
 
 def decide(scores: dict[str, int | None]) -> dict:
-    """문항별 점수(1~5, N/A는 None)로 FinalScore·EvidenceCoverage·Decision을 계산한다.
+    """문항별 점수(1·3·5, N/A는 None)로 FinalScore·EvidenceCoverage·Decision을 계산한다.
 
-    FinalScore       = 유효한 1~5점의 단순 평균 (N/A 제외, 평가 가능한 문항이 없으면 None)
+    FinalScore       = 유효한 점수의 단순 평균 (N/A 제외, 평가 가능한 문항이 없으면 None)
     EvidenceCoverage = N_scored / 12
     N_scored < 9                       → HOLD_INSUFFICIENT_EVIDENCE
     N_scored ≥ 9 AND FinalScore ≥ 3.5  → INVEST
