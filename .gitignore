@@ -1,6 +1,21 @@
+# 비밀 정보
 .env
+
+# Python / 가상환경
 .venv/
 __pycache__/
-.DS_Store
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+
+# 로컬 생성물 (다시 만들 수 있음)
+# vectorstore: uv run python -m rag.build_index / outputs, reports: app.py 실행 결과
 vectorstore/
 outputs/
+reports/
+*.log
+
+# OS / 에디터
+.DS_Store
+.idea/
+.vscode/
