@@ -19,3 +19,6 @@ reports/
 .DS_Store
 .idea/
 .vscode/
+
+# 개발용 (실행에 불필요)
+scripts/
