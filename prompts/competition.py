@@ -43,4 +43,4 @@ COMPETITION_SYSTEM_PROMPT = """당신은 Physical AI / 범용 휴머노이드 �
     "1X Technologies": "타사 대비 상대적 리스크 1~2줄 (B09 연계)"
   }}
 }}
-"""
+""" 
