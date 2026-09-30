@@ -158,7 +158,13 @@ get_llm().invoke([("system", system), ("user", user)])
 ```bash
 uv run python -m rag.retriever "factory deployment" --scope technology --company apptronik   # 검색 확인
 uv run python app.py --companies "Apptronik"                                                 # 기업 1곳만 실행 (토큰 절약)
+uv run python -m unittest discover -v                                                        # 네트워크 없는 단위 테스트
+uv run python -m scripts.run_judge_demo                                                      # [DEMO] State로 세 기업 Judge 실제 LLM 호출
 ```
+
+`run_judge_demo`는 앞단 Agent 대신 명시적인 합성 Evidence를 넣고 Figure AI → Apptronik → 1X Technologies를
+순서대로 평가한다. 문항별 최초 평가, 재평가 사유, Python 검증 후 점수·근거·Confidence·최종 Decision을
+Rich 표로 출력하고 결과 JSON을 `outputs/judge_demo_*.json`에 저장한다. 이 결과는 실제 기업 평가가 아니다.
 
 ---
 

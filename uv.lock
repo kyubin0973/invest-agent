@@ -1059,6 +1059,7 @@ dependencies = [
     { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "pypdf" },
     { name = "python-dotenv" },
+    { name = "rich" },
     { name = "sentence-transformers" },
 ]
 
@@ -1074,6 +1075,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.0.0" },
     { name = "pypdf", specifier = ">=6.0.0" },
     { name = "python-dotenv", specifier = ">=1.1.0" },
+    { name = "rich", specifier = ">=15.0.0" },
     { name = "sentence-transformers", specifier = ">=5.0.0" },
 ]
 

@@ -14,5 +14,6 @@ dependencies = [
     "numpy>=2.0.0",
     "pypdf>=6.0.0",
     "python-dotenv>=1.1.0",
+    "rich>=15.0.0",
     "sentence-transformers>=5.0.0",
 ]
