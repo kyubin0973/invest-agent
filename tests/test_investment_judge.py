@@ -171,7 +171,7 @@ class InvestmentJudgeNodeTests(unittest.TestCase):
         self.assertEqual(result["final_score"], 5.0)
         self.assertEqual(result["key_strengths"], ["외부 확인된 강점"])
         self.assertEqual(update["completed_companies"], ["Test Robotics"])
-        self.assertEqual(result["judge_run"]["prompt_version"], "investment-judge-v2")
+        self.assertEqual(result["judge_run"]["prompt_version"], "investment-judge-v3")
         self.assertEqual(result["judge_run"]["model"], "gpt-4o-mini")
         self.assertEqual(result["judge_run"]["temperature"], 0)
         self.assertEqual(result["judge_run"]["seed"], 42)
@@ -227,6 +227,67 @@ class InvestmentJudgeNodeTests(unittest.TestCase):
         self.assertEqual(len(fake.calls), 1)
         self.assertEqual(result["decision"], "HOLD_INSUFFICIENT_EVIDENCE")
         self.assertEqual(result["evidence_coverage"], 0.0)
+
+    def test_repair_score_with_valid_evidence_normalizes_status_to_scored(self):
+        evidence = make_evidence("E1")
+        initial = [make_assessment(criterion.id) for criterion in CRITERIA]
+        initial[0] = make_assessment("B01", score=5)
+        repaired = make_assessment(
+            "B01",
+            score=3,
+            status="INSUFFICIENT_EVIDENCE",
+            confidence="Low",
+        )
+        repaired["evidence"] = [{"chunk_id": "TEST_C01", "source_id": "TEST"}]
+        fake = FakeStructuredJudge(
+            [
+                {"criteria": initial, "key_strengths": [], "key_risks": []},
+                {"criteria": [repaired], "key_strengths": [], "key_risks": []},
+            ]
+        )
+
+        with patch.object(judge, "get_structured_llm", return_value=fake):
+            update = judge.investment_judge_node(make_state(evidence))
+
+        b01 = next(
+            item
+            for item in update["investment_results"]["Test Robotics"]["criteria"]
+            if item["criterion_id"] == "B01"
+        )
+        self.assertEqual(b01["score"], 3)
+        self.assertEqual(b01["status"], "SCORED")
+        self.assertIn("status를 SCORED로 조정", b01["reasoning"])
+
+    def test_repair_status_is_not_normalized_without_allowed_evidence(self):
+        evidence = make_evidence("E1")
+        initial = [make_assessment(criterion.id) for criterion in CRITERIA]
+        initial[0] = make_assessment("B01", score=5)
+        repaired = make_assessment(
+            "B01",
+            score=3,
+            status="INSUFFICIENT_EVIDENCE",
+            chunk_id="UNKNOWN",
+            source_id="UNKNOWN",
+            confidence="Low",
+        )
+        repaired["evidence"] = [{"chunk_id": "UNKNOWN", "source_id": "UNKNOWN"}]
+        fake = FakeStructuredJudge(
+            [
+                {"criteria": initial, "key_strengths": [], "key_risks": []},
+                {"criteria": [repaired], "key_strengths": [], "key_risks": []},
+            ]
+        )
+
+        with patch.object(judge, "get_structured_llm", return_value=fake):
+            update = judge.investment_judge_node(make_state(evidence))
+
+        b01 = next(
+            item
+            for item in update["investment_results"]["Test Robotics"]["criteria"]
+            if item["criterion_id"] == "B01"
+        )
+        self.assertIsNone(b01["score"])
+        self.assertEqual(b01["status"], "INSUFFICIENT_EVIDENCE")
 
     def test_competitor_evidence_is_allowed_for_differentiation(self):
         own_evidence = make_evidence("E3")

@@ -152,6 +152,52 @@ def _merge_repair(
     return kept + replacements
 
 
+def _normalize_repaired_status(
+    repaired: list[dict],
+    available_evidence: dict[str, dict],
+    allowed_evidence_by_criterion: dict[str, set[tuple[str, str]]],
+) -> tuple[list[dict], list[str]]:
+    """1회 재평가 뒤 남은 score/status 모순만 기계적으로 정규화한다.
+
+    LLM이 유효한 1/3/5점과 허용 Evidence를 함께 반환하면서 status만
+    INSUFFICIENT_EVIDENCE로 둔 경우, 점수나 근거를 새로 만들지 않고 status를
+    SCORED로 맞춘다. Evidence가 없거나 문항 범위를 벗어나면 정규화하지 않아
+    최종 Python 검증에서 N/A가 된다.
+    """
+    normalized: list[dict] = []
+    normalized_ids: list[str] = []
+
+    for raw in repaired:
+        item = dict(raw)
+        criterion_id = item.get("criterion_id")
+        score = item.get("score")
+        refs = item.get("evidence") if isinstance(item.get("evidence"), list) else []
+        allowed_refs = allowed_evidence_by_criterion.get(criterion_id, set())
+        has_valid_evidence = any(
+            isinstance(ref, dict)
+            and (ref.get("chunk_id"), ref.get("source_id")) in allowed_refs
+            and available_evidence.get(ref.get("chunk_id"), {}).get("source_id")
+            == ref.get("source_id")
+            for ref in refs
+        )
+
+        if (
+            item.get("status") == "INSUFFICIENT_EVIDENCE"
+            and isinstance(score, int)
+            and not isinstance(score, bool)
+            and score in ALLOWED_SCORES
+            and has_valid_evidence
+        ):
+            item["status"] = "SCORED"
+            note = "[Python 형식 정규화: 유효한 score와 Evidence에 맞춰 status를 SCORED로 조정]"
+            item["reasoning"] = f"{note} {item.get('reasoning', '')}".strip()
+            normalized_ids.append(str(criterion_id))
+
+        normalized.append(item)
+
+    return normalized, normalized_ids
+
+
 def _canonical_fingerprint(value: object) -> str:
     payload = json.dumps(
         value,
@@ -300,6 +346,17 @@ def _llm_score_criteria(
     log_stage(company, "REPRO", f"repair_response_sha256={response_fingerprints[-1]}")
     repaired_criteria = _as_dict_list(repair.get("criteria"))
     log_criteria(company, "LLM 재평가", repaired_criteria)
+    repaired_criteria, normalized_ids = _normalize_repaired_status(
+        repaired_criteria,
+        available_evidence,
+        allowed_evidence_by_criterion,
+    )
+    if normalized_ids:
+        log_stage(
+            company,
+            "NORMALIZE",
+            f"재평가 score/status 형식 정규화: {', '.join(normalized_ids)}",
+        )
     return {
         "criteria": _merge_repair(initial_criteria, repaired_criteria, issue_ids),
         "key_strengths": [
@@ -379,7 +436,9 @@ def investment_judge_node(state: InvestmentState) -> dict:
         (
             f"technology_evidence={technology_count} | market_evidence={market_count} | "
             f"competition_q4_evidence={len(evidence_context.competition_by_criterion['B04'])} | "
-            f"competition_q9_evidence={len(evidence_context.competition_by_criterion['B09'])}"
+            f"competition_q9_evidence={len(evidence_context.competition_by_criterion['B09'])} | "
+            f"unclassified_excluded={len(evidence_context.excluded_evidence_ids)} | "
+            f"competition_refs_excluded={len(evidence_context.excluded_competition_refs)}"
         ),
     )
     llm_result = _llm_score_criteria(state, company, evidence_context)

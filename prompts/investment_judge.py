@@ -24,7 +24,7 @@ from prompts.common import (
     format_evidence_items,
 )
 
-JUDGE_PROMPT_VERSION = "investment-judge-v2"
+JUDGE_PROMPT_VERSION = "investment-judge-v3"
 
 
 def _analysis_view(result: object) -> dict:
@@ -126,6 +126,9 @@ def build_judge_messages(
         mode = (
             "아래 문항은 첫 평가에서 형식 또는 근거 검증에 실패했다. "
             "실패한 문항만 다시 평가하고 다른 문항은 출력하지 않는다.\n"
+            "재평가에서 1·3·5점을 반환하면 status는 반드시 SCORED여야 한다. "
+            "정말 평가할 근거가 없을 때만 score=null과 status=INSUFFICIENT_EVIDENCE를 함께 사용한다. "
+            "E1~E2 근거만 있다는 이유로 3점과 INSUFFICIENT_EVIDENCE를 함께 반환하지 않는다.\n"
             f"검증 실패 사유:\n{_json(repair_issues)}\n"
             f"이전 출력:\n{_json(previous_assessments or [])}"
         )

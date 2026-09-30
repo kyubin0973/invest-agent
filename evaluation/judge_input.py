@@ -19,6 +19,8 @@ class JudgeEvidenceContext:
     own_evidence: dict[str, dict]
     competition_by_criterion: dict[str, dict[str, dict]]
     competition_owners: dict[str, str]
+    excluded_evidence_ids: tuple[str, ...] = ()
+    excluded_competition_refs: tuple[str, ...] = ()
 
     @property
     def competition_evidence(self) -> dict[str, dict]:
@@ -99,10 +101,39 @@ def _validate_evidence_item(item: object, location: str) -> dict:
         raise ValueError(f"{location}.source_type: 허용되지 않은 값 {item['source_type']!r}")
     if not isinstance(item["reference_metadata"], dict):
         raise ValueError(f"{location}.reference_metadata: object여야 합니다.")
-    if item["evidence_level"] not in EVIDENCE_LEVELS:
-        raise ValueError(f"{location}.evidence_level: E1~E5 중 하나여야 합니다.")
-    _require_non_empty_string(item["fact"], f"{location}.fact")
+    if item["evidence_level"] is not None and item["evidence_level"] not in EVIDENCE_LEVELS:
+        raise ValueError(f"{location}.evidence_level: null 또는 E1~E5 중 하나여야 합니다.")
+    if item["fact"] is not None:
+        _require_non_empty_string(item["fact"], f"{location}.fact")
     return item
+
+
+def _is_scoreable_evidence(item: dict) -> bool:
+    """앞단 분석이 fact와 level을 모두 확정한 Evidence만 Judge 채점에 사용한다."""
+    return (
+        item.get("evidence_level") in EVIDENCE_LEVELS
+        and isinstance(item.get("fact"), str)
+        and bool(item["fact"].strip())
+    )
+
+
+def _competition_criterion_ids(comparison: dict, location: str) -> list[str]:
+    """신·구 Competition 출력 모두 수용하되 문항 범위는 Judge에서 제한한다."""
+    raw = comparison.get("criterion_ids")
+    if raw is not None:
+        if (
+            not isinstance(raw, list)
+            or not raw
+            or len(set(raw)) != len(raw)
+            or not set(raw).issubset(COMPETITION_EVIDENCE_CRITERIA_SET)
+        ):
+            raise ValueError(f"{location}.criterion_ids: B04/B09만 중복 없이 허용합니다.")
+        return raw
+
+    # 현재 팀 Competition 계약에는 criterion_ids가 없다. Risk 축만 B09로,
+    # 나머지 비교축은 차별성 B04로 보수적으로 연결한다.
+    dimension = str(comparison.get("dimension") or "").casefold()
+    return ["B09"] if "risk" in dimension or "리스크" in dimension else ["B04"]
 
 
 def _validate_analysis_result(result: object, company: str, agent: str) -> dict[str, dict]:
@@ -172,7 +203,8 @@ def validate_and_build_evidence_context(
             raise ValueError(f"{field}: 기업별 AnalysisResult object여야 합니다.")
 
     catalog: dict[str, dict] = {}
-    owners: dict[str, str] = {}
+    scoreable_catalog: dict[str, dict] = {}
+    owners: dict[str, set[str]] = {}
     own_evidence: dict[str, dict] = {}
 
     for company in candidates:
@@ -183,14 +215,29 @@ def validate_and_build_evidence_context(
             local = _validate_analysis_result(results.get(company), company, agent)
             for chunk_id, item in local.items():
                 existing = catalog.get(chunk_id)
-                if existing and (existing != item or owners[chunk_id] != company):
+                existing_owners = owners.get(chunk_id, set())
+                shared_industry_evidence = bool(
+                    existing
+                    and existing["source_id"] == item["source_id"]
+                    and existing.get("source_type") == "industry_report"
+                    and item.get("source_type") == "industry_report"
+                )
+                if existing and company not in existing_owners and not shared_industry_evidence:
                     raise ValueError(
                         f"전체 분석 결과에서 chunk_id 충돌: {chunk_id} "
-                        f"({owners[chunk_id]}, {company})"
+                        f"({sorted(existing_owners)}, {company})"
                     )
-                catalog[chunk_id] = item
-                owners[chunk_id] = company
-                if company == current_company:
+                # 동일 회사의 Technology/Market이 같은 원문 청크를 서로 다른 관점으로
+                # 분석하는 것은 허용한다. 공통 산업자료가 여러 기업에서 재사용되면 최초의
+                # 검증 완료 표현을 Competition용 대표 item으로 유지한다.
+                if not existing or company in existing_owners:
+                    catalog[chunk_id] = item
+                    if _is_scoreable_evidence(item):
+                        scoreable_catalog[chunk_id] = item
+                elif _is_scoreable_evidence(item) and chunk_id not in scoreable_catalog:
+                    scoreable_catalog[chunk_id] = item
+                owners.setdefault(chunk_id, set()).add(company)
+                if company == current_company and _is_scoreable_evidence(item):
                     own_evidence[chunk_id] = item
 
     competition = state.get("competition_result")
@@ -199,11 +246,11 @@ def validate_and_build_evidence_context(
     candidate_set = set(candidates)
     for field in ("target_market_context", "differentiation", "relative_risks"):
         values = competition.get(field)
-        if not isinstance(values, dict) or set(values) != candidate_set:
+        if not isinstance(values, dict) or not candidate_set.issubset(values):
             raise ValueError(
                 f"competition_result.{field}: 모든 후보 기업을 포함한 object여야 합니다."
             )
-        if any(not isinstance(value, str) for value in values.values()):
+        if any(not isinstance(values[company], str) for company in candidates):
             raise ValueError(f"competition_result.{field}: 기업별 문자열이어야 합니다.")
     comparisons = competition.get("comparisons")
     if not isinstance(comparisons, list):
@@ -212,38 +259,38 @@ def validate_and_build_evidence_context(
     competition_by_criterion = {
         criterion_id: {} for criterion_id in COMPETITION_EVIDENCE_CRITERIA
     }
+    excluded_competition_refs: list[str] = []
     for index, comparison in enumerate(comparisons):
         location = f"competition_result.comparisons[{index}]"
         if not isinstance(comparison, dict):
             raise ValueError(f"{location}: Comparison object가 아닙니다.")
         _require_non_empty_string(comparison.get("dimension"), f"{location}.dimension")
-        criterion_ids = comparison.get("criterion_ids")
-        if not isinstance(criterion_ids, list) or not criterion_ids:
-            raise ValueError(f"{location}.criterion_ids: B04/B09 중 하나 이상이 필요합니다.")
-        if len(set(criterion_ids)) != len(criterion_ids) or not set(criterion_ids).issubset(
-            COMPETITION_EVIDENCE_CRITERIA_SET
-        ):
-            raise ValueError(f"{location}.criterion_ids: B04/B09만 중복 없이 허용합니다.")
+        criterion_ids = _competition_criterion_ids(comparison, location)
         company_findings = comparison.get("company_findings")
-        if not isinstance(company_findings, dict) or set(company_findings) != candidate_set:
+        if not isinstance(company_findings, dict) or not candidate_set.issubset(company_findings):
             raise ValueError(f"{location}.company_findings: 모든 후보 기업을 포함해야 합니다.")
-        if any(not isinstance(value, str) for value in company_findings.values()):
+        if any(not isinstance(company_findings[company], str) for company in candidates):
             raise ValueError(f"{location}.company_findings: 기업별 문자열이어야 합니다.")
         refs = comparison.get("evidence_refs")
-        if not isinstance(refs, list) or not refs:
-            raise ValueError(f"{location}.evidence_refs: 비어 있지 않은 list여야 합니다.")
+        if not isinstance(refs, list):
+            excluded_competition_refs.append(f"{location}: evidence_refs가 list가 아님")
+            continue
         for ref in refs:
             if not isinstance(ref, dict):
-                raise ValueError(f"{location}: 잘못된 EvidenceRef")
+                excluded_competition_refs.append(f"{location}: {ref!r}")
+                continue
             chunk_id = ref.get("chunk_id")
             source_id = ref.get("source_id")
             item = catalog.get(chunk_id)
             if not item or item["source_id"] != source_id:
-                raise ValueError(
-                    f"{location}: 전체 분석 Evidence에 없는 참조 {chunk_id} | {source_id}"
-                )
+                excluded_competition_refs.append(f"{location}: {chunk_id} | {source_id}")
+                continue
+            scoreable_item = scoreable_catalog.get(chunk_id)
+            if not scoreable_item:
+                excluded_competition_refs.append(f"{location}: {chunk_id} | 미분류")
+                continue
             for criterion_id in criterion_ids:
-                competition_by_criterion[criterion_id][chunk_id] = item
+                competition_by_criterion[criterion_id][chunk_id] = scoreable_item
 
     competition_evidence = {
         chunk_id: item
@@ -251,10 +298,17 @@ def validate_and_build_evidence_context(
         for chunk_id, item in evidence.items()
     }
     competition_owners = {
-        chunk_id: owners[chunk_id] for chunk_id in competition_evidence
+        chunk_id: (
+            next(iter(owners[chunk_id]))
+            if len(owners[chunk_id]) == 1
+            else "공통 산업자료"
+        )
+        for chunk_id in competition_evidence
     }
     return JudgeEvidenceContext(
         own_evidence=own_evidence,
         competition_by_criterion=competition_by_criterion,
         competition_owners=competition_owners,
+        excluded_evidence_ids=tuple(sorted(set(catalog) - set(scoreable_catalog))),
+        excluded_competition_refs=tuple(dict.fromkeys(excluded_competition_refs)),
     )
