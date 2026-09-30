@@ -16,6 +16,7 @@ Agent별 Retrieval Scope (설계 산출물 3.2절):
 import argparse
 import json
 import re
+import threading
 from functools import lru_cache
 
 from langchain_chroma import Chroma
@@ -27,8 +28,13 @@ from rag.config import COLLECTION_NAME, TOP_K, VECTORSTORE_DIR
 from rag.embeddings import get_embeddings
 
 
+# Technology ∥ Market이 병렬로 처음 검색할 때 Chroma 클라이언트를 동시에 만들면 Chroma 내부에서 충돌한다.
+# lru_cache는 동시 첫 호출을 막지 않으므로, 잠금으로 한 스레드만 만들고 나머지는 같은 객체를 쓰게 한다.
+_vectorstore_lock = threading.Lock()
+
+
 @lru_cache
-def get_vectorstore() -> Chroma:
+def _open_vectorstore() -> Chroma:
     if not VECTORSTORE_DIR.exists():
         raise SystemExit("벡터DB가 없습니다. 먼저 `uv run python -m rag.build_index`를 실행하세요.")
     return Chroma(
@@ -36,6 +42,11 @@ def get_vectorstore() -> Chroma:
         embedding_function=get_embeddings(),
         persist_directory=str(VECTORSTORE_DIR),
     )
+
+
+def get_vectorstore() -> Chroma:
+    with _vectorstore_lock:
+        return _open_vectorstore()
 
 
 HANGUL = re.compile(r"[가-힣]")
