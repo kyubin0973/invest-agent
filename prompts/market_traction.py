@@ -57,7 +57,11 @@ def sufficiency_request(company: str, questions: list[dict]) -> str:
 def analysis_request(company: str, target_market: str | None, questions: list[dict], gaps: list[str]) -> str:
     """시장·Traction 분석 요청. 하위 질문별 근거 대응표를 함께 준다."""
     gap_text = "\n".join(f"- {g}" for g in gaps) or "- 없음"
-    q_text = "\n".join(f"- {q['id']} ({q['scope']}): {q['query']} → {', '.join(q['chunk_ids']) or '근거 없음'}" for q in questions)
+    q_text = "\n".join(
+        f"- {q['id']} ({q['scope']}, {'근거 충분' if q.get('sufficient') else '근거 부족'}) [분석축: {' / '.join(q['dimensions'])}]: "
+        f"{q['query']} → {', '.join(q['chunk_ids']) or '근거 없음'}"
+        for q in questions
+    )
     return f"""평가 대상 기업: {company}
 Target Market (사전 입력): {target_market or '미입력'}
 
@@ -66,14 +70,15 @@ Target Market (사전 입력): {target_market or '미입력'}
 
 위 근거로 {company}의 시장·고객·사업을 분석하라.
 
-- findings: dimension은 다음 중 하나만 쓴다: {', '.join(DIMENSIONS)}
-  [하위 질문별 근거]에서 근거가 있는 하위 질문마다 최소 1개의 finding을 쓰고 question_id에 그 질문 ID를 적는다.
+- findings: [하위 질문별 근거]에서 '근거 충분' 하위 질문마다 최소 1개의 finding을 쓰고 question_id에 그 질문 ID를 적는다.
+  '근거 부족' 하위 질문은 근거에 질문에 대한 직접적인 답이 있을 때만 쓰고, 없으면 missing_information에 기록한다.
+  dimension은 그 하위 질문의 [분석축] 중 하나만 쓴다. statement는 그 하위 질문에 답하는 내용이어야 한다.
+  예: 사업모델·가격 질문에는 가격·판매 방식·수익구조만 쓰고, 생산능력·공급망은 제조 질문에 쓴다.
   특히 기업 자료(company) 하위 질문의 근거를 빠뜨리지 않는다. 한 질문에 서로 다른 판단이 있으면 finding을 나눠 쓴다.
   statement는 구체적 사실(수치·고객명·파트너명·조건)을 담은 1~2문장이며, 기업 자료의 내용은 기업 주장임을 드러낸다.
   statement 안에는 chunk_id를 쓰지 않는다 (근거는 evidence_chunk_ids에만).
   evidence_chunk_ids에는 그 판단의 근거 chunk_id를 넣는다 (위 근거 목록에 있는 것만).
-  근거가 일부라도 있으면 finding을 쓰고, 부족한 부분은 missing_information에 적는다.
-  근거가 전혀 없는 분석축만 finding을 쓰지 말고 missing_information에 기록한다.
+  질문에 답하지 못하는 근거로 finding을 채우지 않는다 (주제만 관련 있는 내용을 다른 분석축에 옮겨 쓰지 않는다).
 - evidence: findings에서 사용한 근거(chunk_id)마다 evidence_level과 fact(근거가 말하는 사실 1문장)를 적는다.
   evidence_level: E1 기업 주장·계획 / E2 시연·제한 환경 / E3 외부 확인 / E4 외부 확인된 실제 운영·계약 / E5 반복·규모화
 - risks: 시장·상용화·사업 측면 Risk
@@ -93,7 +98,10 @@ def grounding_request(company: str, findings: list[dict]) -> str:
         "- overstated: 근거는 있으나 과장됐다. 계획·목표를 달성한 사실로 썼거나, 근거에 없는 해석·전망을 덧붙였거나,",
         "  기업 자료의 내용을 확인된 사실처럼 썼다. → revised_statement에 근거에 적힌 내용만으로 고친 문장을 쓴다",
         "  (계획은 '계획'으로, 기업 자료는 '○○ 발표에 따르면'처럼 주장임을 드러낸다).",
-        "- unsupported: 문장의 핵심 내용이 인용 근거에 없다.",
+        "- unsupported: 문장의 핵심 내용이 인용 근거에 전혀 없다.",
+        "  근거에 일부라도 있으면 unsupported가 아니라 overstated로 판정하고 근거에 있는 내용만으로 고쳐 쓴다.",
+        "- off_topic: 문장이 [분석축]의 주제와 맞지 않는다. 예: [사업모델·가격]에 가격·수익구조가 아닌 생산·공급망 내용,",
+        "  [팀·Founder]에 경영진이 아닌 제품 내용. 근거가 맞아도 분석축이 틀리면 off_topic이다.",
         "",
         "[분석 문장]",
     ]

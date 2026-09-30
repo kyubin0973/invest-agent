@@ -4,15 +4,16 @@
 입력: current_company, 현재 기업 자료 + 공통 시장자료, company_profiles (Target Market 등 사전 입력값)
 출력: market_traction_results[current_company], market_traction_done
 
-처리 흐름 (LLM 호출 3회)
+처리 흐름 (LLM 호출 3~4회)
   1. 검색 계획 (코드)      담당 문항별 영어 하위 질문을 시장자료용 / 기업자료용으로 나눠 둔다.
   2. 검색 (코드)            시장자료: search_industry / 기업자료: 현재 기업 문서만. chunk_id로 중복 제거
   3. 충분성 판단 (LLM)      하위 질문별 sufficient, 답이 되는 원문 문장(answer_quote), 보완 검색어를 한 번에 받는다.
   4. 충분성 확인 (코드)      answer_quote가 실제 청크에 없으면 '충분'이라 해도 부족으로 처리한다.
      재검색 (코드)          부족한 하위 질문만 보완 검색어로 최대 1회 재검색 (설계 2.2.2)
   5. 분석 (LLM)             findings(분석축별), 사용 근거, risks, missing_information
+     보완 분석 (LLM, 필요 시)  충분성을 통과했는데 finding이 없는 기업 하위 질문만 1회 다시 분석
   6. 검증 (코드)            없는 chunk_id 제거, Evidence Level 상·하한, 기업 고유 분석축의 근거 범위 확인
-  7. 근거 대조 (LLM)        분석 문장을 인용 원문과 대조: 과장은 고치고, 근거 없는 문장은 제외
+  7. 근거 대조 (LLM)        분석 문장을 인용 원문과 대조: 과장은 고치고, 근거 없거나 분석축과 맞지 않는 문장은 제외
 
 - 담당 평가 문항: evaluation.criteria.criteria_for("market_traction") → B01~B03, B05~B10, H12
 - Market Evidence와 Company Evidence를 섞지 않는다 (설계 2.2.4).
@@ -75,6 +76,23 @@ def _quote_found(quote: str | None, chunk_texts: list[str]) -> bool:
     return False
 
 
+# 분석축별 주제 확인: 근거 원문에 이 단어가 하나도 없으면 그 분석축의 판단으로 인정하지 않는다.
+# gpt-4o-mini가 제조·공급망 내용을 '사업모델·가격'에, 제품 개발팀 내용을 '팀·Founder'에 넣는 경우가 있어 코드로 막는다.
+DIMENSION_TOPICS = {
+    "사업모델·가격": re.compile(
+        r"\$\s?\d|\bprice|\bpricing|subscription|per month|/mo\b|\blease|leasing|as-a-service|\braas\b"
+        r"|revenue|business model|\bsell|\bsale|pre-?order|order now|commercial agreement",
+        re.I,
+    ),
+    "팀·Founder": re.compile(r"founder|founded|\bceo\b|\bcto\b|chief|president|leadership|executive|employees", re.I),
+}
+
+
+def _on_topic(dimension: str, texts: list[str]) -> bool:
+    pattern = DIMENSION_TOPICS.get(dimension)
+    return pattern is None or any(pattern.search(t) for t in texts)
+
+
 # 문장 안에 LLM이 적은 인용 표기 (근거는 evidence_refs에 따로 있으므로 제거)
 INLINE_CITATION = re.compile(r"\s*[\(\[](?:인용:\s*)?[A-Z]\d_P\d{2}_C\d{2}[^\)\]]*[\)\]]")
 
@@ -92,25 +110,33 @@ class SubQuestion:
     scope: Literal["market", "company"]
     query: str  # {company}, {market} 자리표시자
     criteria: tuple[str, ...]  # 관련 문항 (Q번호)
-    document_types: tuple[str, ...] = ()  # 기업 자료에서 우선 찾을 문서 유형
+    dimensions: tuple[str, ...]  # 이 질문의 finding이 쓸 수 있는 분석축 (첫 번째가 기본값)
+    document_types: tuple[str, ...] = ()  # 기업 자료에서 우선 찾을 문서 유형 (documents.config.DOCUMENT_TYPES)
 
 
 SUB_QUESTIONS = (
-    SubQuestion("SQ01", "market", "{market} market size and growth forecast", ("Q1", "Q8")),
-    SubQuestion("SQ02", "market", "labor shortage and automation demand for {market}", ("Q1", "Q2")),
-    SubQuestion("SQ03", "market", "total cost of ownership, payback and ROI of humanoid robots versus human labor", ("Q3",)),
-    SubQuestion("SQ04", "market", "commercialization barriers, safety, regulation and customer adoption of humanoid robots", ("Q9",)),
-    SubQuestion("SQ05", "market", "humanoid robot supply chain constraints, manufacturing cost and scaling", ("Q12",)),
+    SubQuestion("SQ01", "market", "{market} market size and growth forecast", ("Q1", "Q8"),
+                ("시장 규모·성장", "사업 확장성")),
+    SubQuestion("SQ02", "market", "labor shortage and automation demand for {market}", ("Q1", "Q2"),
+                ("고객 문제·Use Case", "시장 규모·성장")),
+    SubQuestion("SQ03", "market", "total cost of ownership, payback and ROI of humanoid robots versus human labor", ("Q3",),
+                ("WTP·도입 경제성",)),
+    SubQuestion("SQ04", "market", "commercialization barriers, safety, regulation and customer adoption of humanoid robots", ("Q9",),
+                ("시장·상용화 Risk",)),
+    SubQuestion("SQ05", "market", "humanoid robot supply chain constraints, manufacturing cost and scaling", ("Q12",),
+                ("시장·상용화 Risk", "WTP·도입 경제성")),
     SubQuestion("SQ06", "company", "{company} customers, pilots, deployments and commercial contracts", ("Q6", "Q2"),
-                ("deployment",)),
+                ("고객검증·배치·계약",), ("deployment",)),
     SubQuestion("SQ07", "company", "{company} tasks and use cases solved for customers", ("Q2", "Q8"),
-                ("deployment", "product")),
+                ("고객 문제·Use Case", "사업 확장성"), ("deployment", "product")),
     SubQuestion("SQ08", "company", "{company} pricing, business model, subscription or robots-as-a-service", ("Q7", "Q3"),
-                ("product",)),
-    SubQuestion("SQ09", "company", "{company} founders, CEO, leadership team and experience", ("Q5", "Q10")),
+                ("사업모델·가격", "WTP·도입 경제성"), ("product", "hardware")),
+    SubQuestion("SQ09", "company", "{company} founders, CEO, leadership team and experience", ("Q5", "Q10"),
+                ("팀·Founder",)),
     SubQuestion("SQ10", "company", "{company} manufacturing partners, production capacity and fleet operations", ("Q12",),
-                ("manufacturing",)),
+                ("제조 파트너·원가·Fleet 운영",), ("manufacturing", "hardware", "deployment")),
 )
+SUB_QUESTIONS_BY_ID = {sq.id: sq for sq in SUB_QUESTIONS}
 
 
 def _retrieve(scope: str, query: str, company: str, document_types: tuple[str, ...] = ()) -> list[Document]:
@@ -161,7 +187,7 @@ class MarketAnalysisOut(BaseModel):
 
 class FindingCheck(BaseModel):
     finding_id: str = Field(description="F1, F2, ...")
-    verdict: Literal["supported", "overstated", "unsupported"]
+    verdict: Literal["supported", "overstated", "unsupported", "off_topic"]
     revised_statement: str | None = Field(default=None, description="overstated일 때만, 근거에 맞게 고친 문장")
     reason: str
 
@@ -183,9 +209,18 @@ def _cap_level(level: str, source_type: str) -> str:
     return level
 
 
-def _validate(out: MarketAnalysisOut, docs: dict[str, Document], company_key: str) -> AnalysisResult:
-    """LLM 출력을 검색 결과와 대조해 AnalysisResult로 만든다."""
+def _dimension_for(question_id: str, dimension: str) -> str:
+    """하위 질문에 허용된 분석축이 아니면 그 질문의 기본 분석축으로 바꾼다 (분석축이 Judge 문항 연결에 쓰인다)."""
+    sq = SUB_QUESTIONS_BY_ID.get(question_id)
+    if sq is None or dimension in sq.dimensions:
+        return dimension
+    return sq.dimensions[0]
+
+
+def _validate(out: MarketAnalysisOut, docs: dict[str, Document], company_key: str) -> tuple[AnalysisResult, set[str]]:
+    """LLM 출력을 검색 결과와 대조해 AnalysisResult와 finding이 남은 하위 질문 ID를 돌려준다."""
     notes: list[str] = []
+    answered: set[str] = set()
 
     evidence: dict[str, EvidenceItem] = {}
 
@@ -204,17 +239,22 @@ def _validate(out: MarketAnalysisOut, docs: dict[str, Document], company_key: st
 
     findings: list[Finding] = []
     for f in out.findings:
+        dimension = _dimension_for(f.question_id, f.dimension)
         ids = [c for c in dict.fromkeys(f.evidence_chunk_ids) if c in docs]
-        if f.dimension in COMPANY_SPECIFIC_DIMENSIONS:
+        if dimension in COMPANY_SPECIFIC_DIMENSIONS:
             # 기업 고유 분석축은 현재 기업 자료로만 뒷받침한다 (Market Evidence ≠ Company Evidence)
             ids = [c for c in ids if docs[c].metadata["company"] == company_key]
         if not ids:
-            notes.append(f"유효한 근거가 없어 제외한 판단 ({f.dimension}): {f.statement}")
+            notes.append(f"유효한 근거가 없어 제외한 판단 ({dimension}): {f.statement}")
+            continue
+        if not _on_topic(dimension, [docs[c].page_content for c in ids]):
+            notes.append(f"근거에 분석축 내용이 없어 제외한 판단 ({dimension}): {f.statement}")
             continue
         for c in ids:
             add_evidence(c)
+        answered.add(f.question_id)
         findings.append({
-            "dimension": f.dimension,
+            "dimension": dimension,
             "statement": _clean(f.statement),
             "evidence_refs": [{"chunk_id": c, "source_id": docs[c].metadata["source_id"]} for c in ids],
         })
@@ -225,6 +265,20 @@ def _validate(out: MarketAnalysisOut, docs: dict[str, Document], company_key: st
         "evidence": list(evidence.values()),
         "risks": out.risks,
         "missing_information": list(dict.fromkeys(out.missing_information + notes)),
+    }, answered
+
+
+def _merge(base: AnalysisResult, extra: AnalysisResult) -> AnalysisResult:
+    """보완 분석 결과를 합친다 (summary는 첫 분석 것을 유지)."""
+    evidence = {e["chunk_id"]: e for e in base["evidence"]}
+    for e in extra["evidence"]:
+        evidence.setdefault(e["chunk_id"], e)
+    return {
+        **base,
+        "findings": base["findings"] + extra["findings"],
+        "evidence": list(evidence.values()),
+        "risks": list(dict.fromkeys(base["risks"] + extra["risks"])),
+        "missing_information": list(dict.fromkeys(base["missing_information"] + extra["missing_information"])),
     }
 
 
@@ -277,26 +331,49 @@ def analyze_market_traction(company: str, profile: dict) -> AnalysisResult:
         if c:
             gaps += [f"{q['id']}: {a}" for a in c.missing_aspects]
 
-    # 5. 분석 (LLM 1회)
-    out = get_structured_llm(MarketAnalysisOut).invoke(
-        [("system", system),
-         ("user", build_user_prompt(
-             format_documents(list(docs.values())),
-             analysis_request(company, profile.get("target_market"), questions, gaps),
-             EVIDENCE_RULES, CITATION_RULES, MARKET_RULES,
-         ))],
-        config={"run_name": "market_analysis"},
-    )
+    # 5. 분석 (LLM 1회) + 6. 검증 (코드)
+    result, answered = _validate(_analyze(company, profile, questions, gaps, docs, system), docs, key)
 
-    # 6. 검증 (코드)
-    result = _validate(out, docs, key)
-    answered = {f.question_id for f in out.findings}
+    # 5-1. 보완 분석 (LLM 최대 1회): 충분성 확인을 통과했는데 finding이 없는 기업 하위 질문만 다시 분석한다.
+    #      기업 고유 문항(Q6·Q7·Q12 등)은 기업 자료 finding이 없으면 Judge가 N/A로 처리하기 때문이다.
+    #      근거 부족 질문은 억지로 채우지 않는다 (Missing Evidence ≠ Negative Evidence).
+    retry = [q for q in questions if q["scope"] == "company" and q["sufficient"] and q["id"] not in answered]
+    if retry:
+        retry_docs = {c: docs[c] for q in retry for c in q["chunk_ids"]}
+        extra, extra_answered = _validate(
+            _analyze(company, profile, retry, gaps, retry_docs, system, run_name="market_analysis_retry"), docs, key
+        )
+        result = _merge(result, extra)
+        answered |= extra_answered
+
     skipped = [q["id"] for q in questions if q["chunk_ids"] and q["id"] not in answered]
     if skipped:
         result["missing_information"].append(f"근거는 검색됐으나 분석되지 않은 하위 질문: {', '.join(skipped)}")
 
     # 7. 근거 대조 (LLM 1회): 과장은 원문에 맞게 고치고, 근거 없는 문장은 제외
     return _ground(result, docs, company, system)
+
+
+def _analyze(
+    company: str,
+    profile: dict,
+    questions: list[dict],
+    gaps: list[str],
+    docs: dict[str, Document],
+    system: str,
+    run_name: str = "market_analysis",
+) -> MarketAnalysisOut:
+    for q in questions:
+        q["dimensions"] = SUB_QUESTIONS_BY_ID[q["id"]].dimensions
+    return get_structured_llm(MarketAnalysisOut).invoke(
+        [("system", system),
+         ("user", build_user_prompt(
+             format_documents(list(docs.values())),
+             analysis_request(company, profile.get("target_market"), questions, gaps),
+             EVIDENCE_RULES, CITATION_RULES, MARKET_RULES,
+         ))],
+        config={"run_name": run_name},
+    )
 
 
 def _ground(result: AnalysisResult, docs: dict[str, Document], company: str, system: str) -> AnalysisResult:
@@ -320,6 +397,8 @@ def _ground(result: AnalysisResult, docs: dict[str, Document], company: str, sys
             kept.append(f)
         elif c.verdict == "overstated" and c.revised_statement:
             kept.append({**f, "statement": _clean(c.revised_statement)})
+        elif c.verdict == "off_topic":
+            notes.append(f"분석축과 맞지 않아 제외한 판단 ({f['dimension']}): {f['statement']}")
         else:
             notes.append(f"근거와 맞지 않아 제외한 판단 ({f['dimension']}): {f['statement']}")
 
