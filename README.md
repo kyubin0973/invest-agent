@@ -45,6 +45,8 @@ invest-agent/
 │   ├── investment_judge.py
 │   └── report_generator.py
 ├── evaluation/criteria.py  # 12문항, Rubric, Python 검증, INVEST/HOLD 판정 규칙
+├── prompts/
+│   └── common.py           # 모든 Agent 공통: 근거 안전 규칙, 인용 규칙, 근거 표기 형식
 ├── rag/
 │   ├── build_index.py      # 인덱싱 (PDF → 청크 → 임베딩 → Chroma)
 │   ├── retriever.py        # Agent용 검색 함수
@@ -110,6 +112,7 @@ initialize_state
 3. **출력은 `core/state.py`의 형식 그대로** (`AnalysisResult`, `InvestmentResult` 등)
 4. **검색 질의는 한국어·영어 모두 가능.** 한국어 질의는 검색 함수가 자동으로 영어로 번역합니다 (한국어 질의 Hit@5 0.719 → 0.938)
 5. **LLM 결과 검증과 판정은 Python**: Judge는 `validate_criteria()`로 Evidence ID·점수를 검증한 뒤 `decide()`로 판정 (LLM이 평균·Decision을 계산하지 않음)
+6. **프롬프트는 `prompts/`에 작성하고 공통 규칙은 `prompts/common.py`에서 가져오기** (아래 "프롬프트 작성" 참고)
 
 ### 검색 함수 (`rag/retriever.py`)
 
@@ -125,6 +128,21 @@ evidence = [to_evidence(d) for d in docs]                               # → Ev
 - 결과마다 `d.metadata["chunk_id"]`(예: `F4_P02_C01`), `page`, `title`, `score`, `search_query`(실제 검색어)가 들어 있습니다.
 - 한국어 질의는 `gpt-4o-mini`로 번역한 뒤 검색합니다 (질의당 약 120 토큰, 1초, 같은 질의는 캐싱). 끄려면 `translate=False`.
 - **유사도 점수로 관련성을 판단하지 마세요.** e5 모델은 관련 없는 문장도 0.7 이상이 나옵니다. 관련성은 LLM으로 평가합니다.
+
+### 프롬프트 작성 (`prompts/common.py`)
+
+```python
+from prompts.common import EVIDENCE_RULES, CITATION_RULES, build_system_prompt, build_user_prompt, format_documents
+
+system = build_system_prompt("휴머노이드 스타트업의 기술·제품 역량을 분석하는 애널리스트")
+user = build_user_prompt(format_documents(docs), "실제 고객 현장 배치 수준을 평가하라.", EVIDENCE_RULES, CITATION_RULES)
+get_llm().invoke([("system", system), ("user", user)])
+```
+
+- **규칙은 system이 아니라 user 메시지의 요청 바로 앞에** 넣습니다. gpt-4o-mini는 system에만 둔 규칙을 잘 지키지 않아 기업 자체 발표를 확인된 사실처럼 썼고, 요청 앞에 두니 기업 주장과 외부 확인을 구분했습니다.
+- Competition·Judge·Report는 `NO_NEW_EVIDENCE_RULE`, Competition·Judge는 `TARGET_MARKET_RULE`도 함께 넣습니다.
+- 검색 결과는 `format_documents(docs)`, EvidenceItem은 `format_evidence_items(items)`로 넣으면 LLM이 `chunk_id`로 인용합니다.
+- 프롬프트만으로는 규칙이 완전히 지켜지지 않으니, Evidence Level·점수는 구조화 출력 + Python 검증을 함께 씁니다.
 
 ### 참고할 교수님 노트북 (`langgraph-v1/20-RAG`)
 
