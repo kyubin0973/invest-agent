@@ -1,4 +1,4 @@
-"""Report Generator (설계 산출물 2.1, 5장 준수 - 최종 전문 투자 심사 보고서)
+"""Report Generator (설계 산출물 2.1, 5장 준수 - 전문 투자 심사 보고서)
 
 역할: 확정된 InvestmentState를 기반으로 전문 VC 투자 보고서 양식의 5쪽 PDF 및 Markdown 생성
 입력: 확정된 InvestmentState
@@ -13,19 +13,22 @@ from reportlab.pdfgen import canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
-# macOS 기본 한글 폰트 등록
+# ---------------------------------------------------------------------------
+# macOS 단일 TrueType 한글 폰트 안전 등록 (글리프 누락/공백 현상 완전 차단)
+# ---------------------------------------------------------------------------
 FONT_NAME = "Helvetica"
-korean_font_paths = [
+
+korean_font_candidates = [
     "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
-    "/System/Library/Fonts/AppleSDGothicNeo.ttc",
+    "/Library/Fonts/AppleGothic.ttf",
     "/Library/Fonts/NanumGothic.ttf",
 ]
 
-for path in korean_font_paths:
-    if os.path.exists(path):
+for font_path in korean_font_candidates:
+    if os.path.exists(font_path):
         try:
-            pdfmetrics.registerFont(TTFont("KoreanFont", path))
-            FONT_NAME = "KoreanFont"
+            pdfmetrics.registerFont(TTFont("KoFont", font_path))
+            FONT_NAME = "KoFont"
             break
         except Exception:
             continue
@@ -56,20 +59,20 @@ class InvestmentReportCanvas(canvas.Canvas):
 
     def draw_header_footer(self, total_pages):
         self.saveState()
-        self.setFont(FONT_NAME, 8)
-        self.setFillColor(colors.HexColor("#718096"))
+        self.setFont(FONT_NAME, 7.5)
+        self.setFillColor(colors.HexColor("#64748B"))
         
-        # 상단 Header Line (본문과 겹치지 않도록 높이 818에 고정)
-        self.drawString(36, 818, "PHYSICAL AI & HUMANOID ROBOTICS INVESTMENT REVIEW")
-        self.drawRightString(559, 818, "CONFIDENTIAL / 심사평가 산출물")
-        self.setStrokeColor(colors.HexColor("#CBD5E0"))
+        # 상단 Header Line: y=825에 배치하여 본문과 완전 분리
+        self.drawString(36, 825, "PHYSICAL AI & HUMANOID ROBOTICS INVESTMENT REVIEW")
+        self.drawRightString(559, 825, "CONFIDENTIAL / 심사평가 산출물")
+        self.setStrokeColor(colors.HexColor("#CBD5E1"))
         self.setLineWidth(0.6)
-        self.line(36, 812, 559, 812)
+        self.line(36, 819, 559, 819)
 
         # 하단 Footer Line
-        self.line(36, 36, 559, 36)
-        self.drawString(36, 25, "AI STARTUP INVESTMENT EVALUATION AGENT")
-        self.drawRightString(559, 25, f"Page {self._pageNumber} of {total_pages}")
+        self.line(36, 34, 559, 34)
+        self.drawString(36, 23, "AI STARTUP INVESTMENT EVALUATION AGENT")
+        self.drawRightString(559, 23, f"Page {self._pageNumber} of {total_pages}")
         self.restoreState()
 
 
@@ -79,7 +82,6 @@ class InvestmentReportCanvas(canvas.Canvas):
 def collect_references(state: InvestmentState) -> list[ReferenceItem]:
     refs: dict[str, ReferenceItem] = {}
     
-    # 1. investment_results Evidence 집계
     for result in state.get("investment_results", {}).values():
         for criterion in result.get("criteria", []):
             for ev in criterion.get("evidence", []):
@@ -100,7 +102,6 @@ def collect_references(state: InvestmentState) -> list[ReferenceItem]:
                 if ev.get("page") and ev["page"] not in ref["pages"]:
                     ref["pages"].append(ev["page"])
 
-    # 2. technology 및 market 분석 결과의 evidence 집계
     for res_dict in [state.get("technology_results", {}), state.get("market_traction_results", {})]:
         for comp_res in res_dict.values():
             for ev in comp_res.get("evidence", []):
@@ -162,13 +163,12 @@ def _render_markdown(state: InvestmentState, references: list[ReferenceItem]) ->
 def generate_pdf_report(state: InvestmentState, references: list[ReferenceItem], output_path: str = "reports/investment_report.pdf") -> str:
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     
-    # 상단 여백을 54로 늘려 헤더 라인과 분리
     doc = SimpleDocTemplate(
         output_path,
         pagesize=A4,
         leftMargin=36,
         rightMargin=36,
-        topMargin=54,
+        topMargin=64,
         bottomMargin=44
     )
 
@@ -178,41 +178,41 @@ def generate_pdf_report(state: InvestmentState, references: list[ReferenceItem],
         "ReportTitle",
         parent=styles["Heading1"],
         fontName=FONT_NAME,
-        fontSize=14,
-        leading=18,
+        fontSize=13,
+        leading=16,
         textColor=colors.HexColor("#0F172A"),
-        spaceAfter=8
+        spaceAfter=5
     )
     h2_style = ParagraphStyle(
         "SectionHeading",
         parent=styles["Heading2"],
         fontName=FONT_NAME,
-        fontSize=10.5,
-        leading=14,
+        fontSize=9.5,
+        leading=13,
         textColor=colors.HexColor("#1E3A8A"),
-        spaceBefore=4,
-        spaceAfter=3
+        spaceBefore=3,
+        spaceAfter=2
     )
     body_style = ParagraphStyle(
         "BodyDark",
         parent=styles["Normal"],
         fontName=FONT_NAME,
-        fontSize=8,
+        fontSize=7.8,
         leading=11.5,
         textColor=colors.HexColor("#334155")
     )
     bullet_style = ParagraphStyle(
         "BulletText",
         parent=body_style,
-        leftIndent=8,
-        spaceAfter=2
+        leftIndent=6,
+        spaceAfter=1.5
     )
     table_cell = ParagraphStyle(
         "TableCell",
         parent=styles["Normal"],
         fontName=FONT_NAME,
-        fontSize=7.5,
-        leading=10,
+        fontSize=7.2,
+        leading=9.5,
         textColor=colors.HexColor("#1E293B")
     )
     table_header = ParagraphStyle(
@@ -236,19 +236,19 @@ def generate_pdf_report(state: InvestmentState, references: list[ReferenceItem],
     # PAGE 1: SUMMARY & Company Snapshot
     # =========================================================================
     story.append(Paragraph("1. SUMMARY & Investment Verdict", title_style))
-    story.append(Paragraph("<b>전체 투자 심사 종합 결론 (Investment Synthesis)</b>", h2_style))
+    story.append(Paragraph("전체 투자 심사 종합 결론 (Investment Synthesis)", h2_style))
     
     summary_data = [[
-        Paragraph("<b>Target Company</b>", table_header),
-        Paragraph("<b>Decision</b>", table_header),
-        Paragraph("<b>Final Score</b>", table_header),
-        Paragraph("<b>Coverage (검증비율)</b>", table_header)
+        Paragraph("Target Company", table_header),
+        Paragraph("Decision", table_header),
+        Paragraph("Final Score", table_header),
+        Paragraph("Coverage (검증비율)", table_header)
     ]]
     for c in companies:
         r = results.get(c, {})
         dec = r.get("decision", "HOLD")
         dec_color = "#047857" if dec == "INVEST" else "#B91C1C" if "INSUFFICIENT" in dec else "#4B5563"
-        dec_p = Paragraph(f"<b><font color='{dec_color}'>{dec}</font></b>", table_cell)
+        dec_p = Paragraph(f"<font color='{dec_color}'><b>{dec}</b></font>", table_cell)
         summary_data.append([
             Paragraph(f"<b>{c}</b>", table_cell),
             dec_p,
@@ -262,13 +262,13 @@ def generate_pdf_report(state: InvestmentState, references: list[ReferenceItem],
         ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#CBD5E1")),
         ('ALIGN', (0,0), (-1,-1), 'CENTER'),
         ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-        ('TOPPADDING', (0,0), (-1,-1), 4),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+        ('TOPPADDING', (0,0), (-1,-1), 3.5),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 3.5),
     ]))
     story.append(t_sum)
-    story.append(Spacer(1, 8))
+    story.append(Spacer(1, 5))
 
-    story.append(Paragraph("<b>핵심 투자 근거 및 의사결정 사유 (Decision Thesis)</b>", h2_style))
+    story.append(Paragraph("핵심 투자 근거 및 의사결정 사유 (Decision Thesis)", h2_style))
     for c in companies:
         r = results.get(c, {})
         d_reason = r.get("decision_reason", "판단 사유 미기재")
@@ -280,15 +280,15 @@ def generate_pdf_report(state: InvestmentState, references: list[ReferenceItem],
             f"&nbsp;&nbsp;&nbsp;&nbsp;<font color='#991B1B'><b>[관리 리스크]</b></font> {risks}"
         )
         story.append(Paragraph(block, bullet_style))
-        story.append(Spacer(1, 2))
+        story.append(Spacer(1, 1.5))
 
-    story.append(Spacer(1, 6))
-    story.append(Paragraph("<b>Company Snapshot (대상 기업 프로필 개요)</b>", h2_style))
+    story.append(Spacer(1, 4))
+    story.append(Paragraph("Company Snapshot (대상 기업 프로필 개요)", h2_style))
     snap_data = [[
-        Paragraph("<b>Company</b>", table_header),
-        Paragraph("<b>Target Market Segment</b>", table_header),
-        Paragraph("<b>Stage</b>", table_header),
-        Paragraph("<b>Private</b>", table_header)
+        Paragraph("Company", table_header),
+        Paragraph("Target Market Segment", table_header),
+        Paragraph("Stage", table_header),
+        Paragraph("Private", table_header)
     ]]
     for c in companies:
         p = profiles.get(c, {})
@@ -317,7 +317,7 @@ def generate_pdf_report(state: InvestmentState, references: list[ReferenceItem],
     for c in companies:
         t = tech.get(c, {})
         content_p = []
-        content_p.append(Paragraph(f"<b><font size='9.5' color='#1E3A8A'>{c}</font></b>", body_style))
+        content_p.append(Paragraph(f"<b><font size='9' color='#1E3A8A'>{c}</font></b>", body_style))
         content_p.append(Paragraph(f"• <b>기술·제품 핵심 컨셉:</b> {t.get('summary', '분석 데이터 없음')}", bullet_style))
         
         for f in t.get("findings", []):
@@ -332,13 +332,13 @@ def generate_pdf_report(state: InvestmentState, references: list[ReferenceItem],
         card_t.setStyle(TableStyle([
             ('BACKGROUND', (0,0), (-1,-1), colors.HexColor("#F8FAFC")),
             ('BOX', (0,0), (-1,-1), 0.8, colors.HexColor("#E2E8F0")),
-            ('TOPPADDING', (0,0), (-1,-1), 5),
-            ('BOTTOMPADDING', (0,0), (-1,-1), 5),
+            ('TOPPADDING', (0,0), (-1,-1), 4.5),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 4.5),
             ('LEFTPADDING', (0,0), (-1,-1), 7),
             ('RIGHTPADDING', (0,0), (-1,-1), 7),
         ]))
         story.append(card_t)
-        story.append(Spacer(1, 6))
+        story.append(Spacer(1, 4.5))
     story.append(PageBreak())
 
     # =========================================================================
@@ -348,7 +348,7 @@ def generate_pdf_report(state: InvestmentState, references: list[ReferenceItem],
     for c in companies:
         m = market.get(c, {})
         content_p = []
-        content_p.append(Paragraph(f"<b><font size='9.5' color='#1E3A8A'>{c}</font></b>", body_style))
+        content_p.append(Paragraph(f"<b><font size='9' color='#1E3A8A'>{c}</font></b>", body_style))
         content_p.append(Paragraph(f"• <b>시장 견인력 및 사업화 실적:</b> {m.get('summary', '분석 데이터 없음')}", bullet_style))
         
         for f in m.get("findings", []):
@@ -363,26 +363,26 @@ def generate_pdf_report(state: InvestmentState, references: list[ReferenceItem],
         card_t.setStyle(TableStyle([
             ('BACKGROUND', (0,0), (-1,-1), colors.HexColor("#F8FAFC")),
             ('BOX', (0,0), (-1,-1), 0.8, colors.HexColor("#E2E8F0")),
-            ('TOPPADDING', (0,0), (-1,-1), 5),
-            ('BOTTOMPADDING', (0,0), (-1,-1), 5),
+            ('TOPPADDING', (0,0), (-1,-1), 4.5),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 4.5),
             ('LEFTPADDING', (0,0), (-1,-1), 7),
             ('RIGHTPADDING', (0,0), (-1,-1), 7),
         ]))
         story.append(card_t)
-        story.append(Spacer(1, 6))
+        story.append(Spacer(1, 4.5))
     story.append(PageBreak())
 
     # =========================================================================
     # PAGE 4: Competition & Evaluation
     # =========================================================================
     story.append(Paragraph("4. Competition & Investment Evaluation", title_style))
-    story.append(Paragraph("<b>5대 비교 축 경쟁 분석 (Target Market Context & Dimension)</b>", h2_style))
+    story.append(Paragraph("5대 비교 축 경쟁 분석 (Target Market Context & Dimension)", h2_style))
     
     comp_table_data = [[
-        Paragraph("<b>Dimension</b>", table_header),
-        Paragraph("<b>Figure AI</b>", table_header),
-        Paragraph("<b>Apptronik</b>", table_header),
-        Paragraph("<b>1X Technologies</b>", table_header)
+        Paragraph("Dimension", table_header),
+        Paragraph("Figure AI", table_header),
+        Paragraph("Apptronik", table_header),
+        Paragraph("1X Technologies", table_header)
     ]]
     for item in comp.get("comparisons", []):
         dim = item.get("dimension", "")
@@ -400,19 +400,19 @@ def generate_pdf_report(state: InvestmentState, references: list[ReferenceItem],
             ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#F1F5F9")),
             ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#CBD5E1")),
             ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-            ('TOPPADDING', (0,0), (-1,-1), 2.5),
-            ('BOTTOMPADDING', (0,0), (-1,-1), 2.5),
+            ('TOPPADDING', (0,0), (-1,-1), 2),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 2),
         ]))
         story.append(t_comp)
-        story.append(Spacer(1, 6))
+        story.append(Spacer(1, 5))
 
-    story.append(Paragraph("<b>12문항 스코어카드 (Criteria Scorecard: B01~B10, H11~H12)</b>", h2_style))
+    story.append(Paragraph("12문항 스코어카드 (Criteria Scorecard: B01~B10, H11~H12)", h2_style))
     crit_table_data = [[
-        Paragraph("<b>No</b>", table_header),
-        Paragraph("<b>Evaluation Criteria (12문항)</b>", table_header),
-        Paragraph("<b>Figure AI</b>", table_header),
-        Paragraph("<b>Apptronik</b>", table_header),
-        Paragraph("<b>1X Technologies</b>", table_header)
+        Paragraph("No", table_header),
+        Paragraph("Evaluation Criteria (12문항)", table_header),
+        Paragraph("Figure AI", table_header),
+        Paragraph("Apptronik", table_header),
+        Paragraph("1X Technologies", table_header)
     ]]
     for crit in CRITERIA:
         row = [Paragraph(f"<b>{crit.q}</b>", table_cell), Paragraph(crit.name, table_cell)]
@@ -422,7 +422,6 @@ def generate_pdf_report(state: InvestmentState, references: list[ReferenceItem],
             row.append(Paragraph(f"<b>{score_val}</b>", table_cell))
         crit_table_data.append(row)
     
-    # 종합 점수 및 판정 요약 행
     crit_table_data.append([
         Paragraph("<b>-</b>", table_cell), Paragraph("<b>Final Score (평균)</b>", table_cell)
     ] + [Paragraph(f"<b>{fmt(results.get(c, {}).get('final_score'))}</b>", table_cell) for c in companies])
@@ -435,16 +434,16 @@ def generate_pdf_report(state: InvestmentState, references: list[ReferenceItem],
         Paragraph("<b>-</b>", table_cell), Paragraph("<b>Final Decision</b>", table_cell)
     ] + [Paragraph(f"<b>{results.get(c, {}).get('decision', 'N/A')}</b>", table_cell) for c in companies])
 
-    # No 열을 30으로 넓혀 줄바꿈 방지
-    t_crit = Table(crit_table_data, colWidths=[30, 203, 96, 97, 97])
+    # No 열 너비를 36으로 넓혀 Q10~Q12 줄바꿈 방지
+    t_crit = Table(crit_table_data, colWidths=[36, 197, 96, 97, 97])
     t_crit.setStyle(TableStyle([
         ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#F1F5F9")),
         ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#CBD5E1")),
-        ('ALIGN', (0,0), (0,-1), 'CENTER'),
+        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
         ('ALIGN', (2,0), (-1,-1), 'CENTER'),
         ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-        ('TOPPADDING', (0,0), (-1,-1), 1.2),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 1.2),
+        ('TOPPADDING', (0,0), (-1,-1), 1),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 1),
         ('LINEBELOW', (0,-4), (-1,-4), 1.2, colors.HexColor("#334155")),
         ('BACKGROUND', (0,-3), (-1,-1), colors.HexColor("#F8FAFC")),
     ]))
@@ -456,7 +455,7 @@ def generate_pdf_report(state: InvestmentState, references: list[ReferenceItem],
     # =========================================================================
     story.append(Paragraph("5. REFERENCE (실제 인용 참고자료 목록)", title_style))
     story.append(Paragraph("보고서 작성 및 투자 판단에 실제로 활용된 검증 출처 목록입니다. (기관 보고서 / 학술 논문 / 웹페이지 규격 준수)", body_style))
-    story.append(Spacer(1, 10))
+    story.append(Spacer(1, 8))
 
     if references:
         for idx, ref in enumerate(references, 1):

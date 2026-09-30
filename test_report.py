@@ -4,12 +4,10 @@ from core.state import InvestmentState
 
 CRITERION_IDS = [f"B{str(i).zfill(2)}" for i in range(1, 11)] + ["H11", "H12"]
 
-# test_report.py의 build_criteria 수정
 def build_criteria(base_score: int, comp_name: str = "Figure AI"):
     criteria = []
     for cid in CRITERION_IDS:
         ev_list = []
-        # Figure AI -> 기관 보고서 연결
         if comp_name == "Figure AI" and cid == "B01":
             ev_list.append({
                 "source_id": "rep_01",
@@ -19,7 +17,6 @@ def build_criteria(base_score: int, comp_name: str = "Figure AI"):
                 "page": 14,
                 "reference_metadata": {"reference_type": "report", "url": "https://kiria.org/report/2026"}
             })
-        # Apptronik -> 학술 논문 연결
         elif comp_name == "Apptronik" and cid == "B04":
             ev_list.append({
                 "source_id": "paper_02",
@@ -29,7 +26,6 @@ def build_criteria(base_score: int, comp_name: str = "Figure AI"):
                 "page": 45,
                 "reference_metadata": {"reference_type": "paper", "journal": "IEEE Robotics and Automation Letters", "volume": "Vol.11, No.2"}
             })
-        # 1X Technologies -> 웹페이지 연결
         elif comp_name == "1X Technologies" and cid == "B06":
             ev_list.append({
                 "source_id": "web_03",
@@ -186,7 +182,7 @@ mock_state: InvestmentState = {
     },
     "investment_results": {
         "Figure AI": {
-            "criteria": build_criteria(5, with_evidence=True),
+            "criteria": build_criteria(5, "Figure AI"),
             "final_score": 4.17,
             "evidence_coverage": 1.0,
             "decision": "INVEST",
@@ -196,7 +192,7 @@ mock_state: InvestmentState = {
             "missing_information": ["장기 부품 내구성 검증 데이터"]
         },
         "Apptronik": {
-            "criteria": build_criteria(3),
+            "criteria": build_criteria(3, "Apptronik"),
             "final_score": 3.00,
             "evidence_coverage": 1.0,
             "decision": "HOLD",
@@ -206,7 +202,7 @@ mock_state: InvestmentState = {
             "missing_information": ["본계약 발주 확정 수량"]
         },
         "1X Technologies": {
-            "criteria": build_criteria(3),
+            "criteria": build_criteria(3, "1X Technologies"),
             "final_score": 3.00,
             "evidence_coverage": 1.0,
             "decision": "HOLD",
@@ -218,36 +214,11 @@ mock_state: InvestmentState = {
     },
     "final_route": "INVEST_FOUND",
     "completed_companies": ["Figure AI", "Apptronik", "1X Technologies"],
-    "references": [
-        {
-            "source_id": "rep_01",
-            "title": "2026 글로벌 휴머노이드 로보틱스 산업 전망",
-            "publisher": "한국로봇산업진흥원",
-            "published_date": "2026-03",
-            "reference_metadata": {"reference_type": "report", "url": "https://kiria.org/report/2026"},
-            "pages": [12, 14, 15]
-        },
-        {
-            "source_id": "paper_02",
-            "title": "Vision-Language-Action Models in Humanoid Manipulation",
-            "publisher": "김로봇 외 3명",
-            "published_date": "2026-01",
-            "reference_metadata": {"reference_type": "paper", "journal": "IEEE Robotics and Automation Letters", "volume": "Vol.11, No.2"},
-            "pages": [45, 46]
-        },
-        {
-            "source_id": "web_03",
-            "title": "Figure AI and BMW Manufacturing Partnership Update",
-            "publisher": "TechCrunch",
-            "published_date": "2026-02-18",
-            "reference_metadata": {"reference_type": "web", "site_name": "TechCrunch", "url": "https://techcrunch.com/2026/02/figure-bmw"},
-            "pages": [1]
-        }
-    ],
+    "references": [],
     "final_report": None
 }
 
 output = report_generator_node(mock_state)
-print(">>> 보고서 재생성 성공!")
+print(">>> 보고서 생성 성공!")
 print("1. 생성된 PDF 경로:", output["report_path"])
 print("2. 수집된 References 건수:", len(output["references"]))
