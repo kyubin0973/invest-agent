@@ -180,7 +180,7 @@ def _confidence_cap(evidence: list[dict]) -> str:
 # ---------------------------------------------------------------------------
 # 1·3·5 척도에서 3.5는 '기업자료 중심(3점)'을 넘어 외부 검증된 강점(5점)이 충분해야 넘는 기준이다.
 # 예) 12문항: 5점 3개 + 3점 9개 = 평균 3.5 → INVEST / 9문항: 5점 2개 + 3점 7개 = 평균 3.44 → HOLD
-INVEST_SCORE_THRESHOLD = 3.5
+INVEST_SCORE_THRESHOLD = 3.2
 MIN_SCORED_CRITERIA = 9  # Coverage 70% 이상 = 12문항 중 최소 9개 (9/12 = 75.0%)
 
 
