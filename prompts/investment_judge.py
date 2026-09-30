@@ -24,6 +24,18 @@ from prompts.common import (
     format_evidence_items,
 )
 
+JUDGE_PROMPT_VERSION = "investment-judge-v3"
+
+
+def _analysis_view(result: object) -> dict:
+    """EvidenceItem 원문은 별도 Evidence 블록에만 두고 분석 결론만 Context에 남긴다."""
+    if not isinstance(result, dict):
+        return {}
+    return {
+        key: result.get(key)
+        for key in ("summary", "findings", "risks", "missing_information")
+    }
+
 
 def _criterion_spec(criterion_ids: set[str]) -> list[dict]:
     return [
@@ -45,10 +57,25 @@ def _analysis_context(state: dict, company: str) -> dict:
     return {
         "company": company,
         "company_profile": state.get("company_profiles", {}).get(company, {}),
-        "technology_analysis": state.get("technology_results", {}).get(company, {}),
-        "market_traction_analysis": state.get("market_traction_results", {}).get(company, {}),
+        "technology_analysis": _analysis_view(
+            state.get("technology_results", {}).get(company, {})
+        ),
+        "market_traction_analysis": _analysis_view(
+            state.get("market_traction_results", {}).get(company, {})
+        ),
         "competition": competition,
     }
+
+
+def _json(value: object) -> str:
+    """프롬프트 fingerprint가 실행마다 흔들리지 않도록 canonical JSON을 만든다."""
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
 
 
 def build_judge_messages(
@@ -56,16 +83,35 @@ def build_judge_messages(
     company: str,
     evidence: list[dict],
     *,
+    competition_evidence: list[tuple[str, dict, list[str]]] | None = None,
     criterion_ids: set[str] | None = None,
     repair_issues: dict[str, list[str]] | None = None,
     previous_assessments: list[dict] | None = None,
 ) -> list[tuple[str, str]]:
     """초기 일괄 평가 또는 문제 문항의 1회 보정 메시지를 만든다."""
     requested_ids = criterion_ids or {criterion.id for criterion in CRITERIA}
-    context = json.dumps(_analysis_context(state, company), ensure_ascii=False, indent=2, default=str)
-    evidence_text = format_evidence_items(evidence) or "제공된 Evidence 없음"
-    specs = json.dumps(_criterion_spec(requested_ids), ensure_ascii=False, indent=2)
-    rubric = json.dumps(
+    context = _json(_analysis_context(state, company))
+    sorted_evidence = sorted(evidence, key=lambda item: (item["source_id"], item["chunk_id"]))
+    own_evidence_text = format_evidence_items(sorted_evidence) or "제공된 현재 기업 Evidence 없음"
+    competition_blocks = []
+    sorted_competition_evidence = sorted(
+        competition_evidence or [],
+        key=lambda value: (value[1]["source_id"], value[1]["chunk_id"]),
+    )
+    for owner, item, allowed_criteria in sorted_competition_evidence:
+        competition_blocks.append(
+            f"<competition_evidence_owner>{owner}</competition_evidence_owner>\n"
+            f"<allowed_criteria>{','.join(allowed_criteria)}</allowed_criteria>\n"
+            f"{format_evidence_items([item])}"
+        )
+    competition_evidence_text = "\n".join(competition_blocks) or "제공된 Competition Evidence 없음"
+    evidence_text = (
+        f"[현재 평가 기업 Evidence: {company}]\n{own_evidence_text}\n\n"
+        "[Competition Evidence: B04(Q4)·B09(Q9)에서만 사용 가능]\n"
+        f"{competition_evidence_text}"
+    )
+    specs = _json(_criterion_spec(requested_ids))
+    rubric = _json(
         {
             "evidence_levels": EVIDENCE_LEVELS,
             "evidence_level_rule": EVIDENCE_LEVEL_RULE,
@@ -74,16 +120,17 @@ def build_judge_messages(
             "confidence_levels": CONFIDENCE_LEVELS,
             "criterion_boundaries": list(CRITERION_BOUNDARIES),
         },
-        ensure_ascii=False,
-        indent=2,
     )
 
     if repair_issues:
         mode = (
             "아래 문항은 첫 평가에서 형식 또는 근거 검증에 실패했다. "
             "실패한 문항만 다시 평가하고 다른 문항은 출력하지 않는다.\n"
-            f"검증 실패 사유:\n{json.dumps(repair_issues, ensure_ascii=False, indent=2)}\n"
-            f"이전 출력:\n{json.dumps(previous_assessments or [], ensure_ascii=False, indent=2, default=str)}"
+            "재평가에서 1·3·5점을 반환하면 status는 반드시 SCORED여야 한다. "
+            "정말 평가할 근거가 없을 때만 score=null과 status=INSUFFICIENT_EVIDENCE를 함께 사용한다. "
+            "E1~E2 근거만 있다는 이유로 3점과 INSUFFICIENT_EVIDENCE를 함께 반환하지 않는다.\n"
+            f"검증 실패 사유:\n{_json(repair_issues)}\n"
+            f"이전 출력:\n{_json(previous_assessments or [])}"
         )
     else:
         mode = "요청된 12개 문항을 모두 한 번씩 평가한다. 누락하거나 중복하지 않는다."
@@ -108,6 +155,8 @@ def build_judge_messages(
 - Q9는 점수가 높을수록 Risk가 관리 가능하다는 뜻이다.
 - confidence는 High, Medium, Low 중 하나만 사용한다.
 - Evidence의 원문 Metadata를 새로 만들지 말고 chunk_id와 source_id만 참조한다.
+- Competition Evidence는 각 항목의 allowed_criteria에 표시된 B04(Q4) 또는 B09(Q9)에만 인용한다. 다른 문항에는 현재 평가 기업 Evidence만 사용한다.
+- Competition Evidence의 owner를 확인하고 타사 Evidence를 현재 기업의 직접 성과·고객·시장 근거로 바꾸지 않는다.
 - reasoning에는 해당 문항의 판단과 한계를 함께 적고, 다른 문항과 같은 의미로 중복 가점·감점하지 않는다.
 - key_strengths와 key_risks는 criterion_ids와 evidence 참조를 포함해야 한다. 확인되지 않은 요약은 만들지 않는다.
 - FinalScore, EvidenceCoverage, Decision은 계산하지 않는다. Python이 계산한다."""
