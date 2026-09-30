@@ -194,7 +194,7 @@ def _criterion_issues(
                 reasons.append(f"허용되지 않은 status: {status!r}")
 
             if invalid_refs:
-                reasons.append("존재하지 않거나 source_id가 불일치하는 Evidence 참조")
+                reasons.append("존재하지 않거나 source_id·문항 허용 범위가 불일치하는 Evidence 참조")
             if confidence not in CONFIDENCE_LEVELS:
                 reasons.append(f"허용되지 않은 confidence: {confidence!r}")
             if score == 5 and not any(
