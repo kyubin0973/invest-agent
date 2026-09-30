@@ -266,6 +266,7 @@ def build_demo_state() -> dict:
             "comparisons": [
                 {
                     "dimension": "[DEMO] 상용화와 기술 성숙도",
+                    "criterion_ids": ["B04", "B09"],
                     "company_findings": {
                         "Figure AI": "[DEMO] 외부 확인된 Pilot이 있으나 장기 반복 운영은 미확인",
                         "Apptronik": "[DEMO] 고객·제조 파트너가 실제 현장 운영을 확인",

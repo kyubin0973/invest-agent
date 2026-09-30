@@ -36,7 +36,7 @@ invest-agent/
 ├── core/
 │   ├── graph.py            # LangGraph 워크플로 (설계서 7장)
 │   ├── state.py            # State 스키마 (설계서 6장)
-│   ├── llm.py              # 공통 LLM: gpt-4o-mini, temperature 0
+│   ├── llm.py              # 공통 LLM: gpt-4o-mini, temperature 0, seed 42
 │   └── tracing.py          # .env 로드 + LangSmith 프로젝트 U_2_4
 ├── agents/                 # Agent 5개 ← 여기를 개발
 │   ├── technology.py
@@ -44,7 +44,9 @@ invest-agent/
 │   ├── competition.py
 │   ├── investment_judge.py
 │   └── report_generator.py
-├── evaluation/criteria.py  # 12문항, Rubric, Python 검증, INVEST/HOLD 판정 규칙
+├── evaluation/
+│   ├── criteria.py         # 12문항, Rubric, Python 검증, INVEST/HOLD 판정 규칙
+│   └── judge_input.py      # Judge 입력 계약과 문항별 Competition Evidence 검증
 ├── prompts/
 │   └── common.py           # 모든 Agent 공통: 근거 안전 규칙, 인용 규칙, 근거 표기 형식
 ├── rag/
@@ -113,6 +115,10 @@ initialize_state
 4. **검색 질의는 한국어·영어 모두 가능.** 한국어 질의는 검색 함수가 자동으로 영어로 번역합니다 (한국어 질의 Hit@5 0.719 → 0.938)
 5. **LLM 결과 검증과 판정은 Python**: Judge는 `validate_criteria()`로 Evidence ID·점수를 검증한 뒤 `decide()`로 판정 (LLM이 평균·Decision을 계산하지 않음)
 6. **프롬프트는 `prompts/`에 작성하고 공통 규칙은 `prompts/common.py`에서 가져오기** (아래 "프롬프트 작성" 참고)
+
+Investment Judge 결과의 `judge_run`에는 prompt/model 버전, temperature, seed, 최초 입력과 각 호출
+프롬프트·구조화 응답의 SHA-256, 호출 횟수, 재평가 문항이 저장된다. 동일 입력 비교와 실행 이력 확인용이며,
+temperature·seed 설정은 모델 서비스의 백엔드 변경까지 완전히 같은 출력을 보장하지는 않는다.
 
 ### 검색 함수 (`rag/retriever.py`)
 

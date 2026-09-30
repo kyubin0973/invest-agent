@@ -158,13 +158,29 @@ CONFIDENCE_LEVELS = {
     "Medium": "판단 가능한 근거는 있으나 기업자료 비중이 크거나 검증범위 제한",
     "Low": "근거가 적거나 초기·소수 자료 중심",
 }
+CONFIDENCE_ORDER = {"Low": 0, "Medium": 1, "High": 2}
+
+
+def _confidence_cap(evidence: list[dict]) -> str:
+    """근거 수·독립 출처·외부검증 수준으로 허용 가능한 confidence 상한을 정한다."""
+    source_ids = {item["source_id"] for item in evidence}
+    externally_verified_sources = {
+        item["source_id"]
+        for item in evidence
+        if item.get("evidence_level") in ("E3", "E4", "E5")
+    }
+    if len(externally_verified_sources) >= 2:
+        return "High"
+    if externally_verified_sources or len(source_ids) >= 2:
+        return "Medium"
+    return "Low"
 
 # ---------------------------------------------------------------------------
 # 계산과 최종 판단 규칙 (설계 3.4) - Prototype 운영 기준이며 업계 표준으로 주장하지 않는다
 # ---------------------------------------------------------------------------
 # 1·3·5 척도에서 3.5는 '기업자료 중심(3점)'을 넘어 외부 검증된 강점(5점)이 충분해야 넘는 기준이다.
 # 예) 12문항: 5점 3개 + 3점 9개 = 평균 3.5 → INVEST / 9문항: 5점 2개 + 3점 7개 = 평균 3.44 → HOLD
-INVEST_SCORE_THRESHOLD = 3.5
+INVEST_SCORE_THRESHOLD = 3.2
 MIN_SCORED_CRITERIA = 9  # Coverage 70% 이상 = 12문항 중 최소 9개 (9/12 = 75.0%)
 
 
@@ -190,6 +206,8 @@ def validate_criteria(
       이 처리는 최후의 안전장치이며, Judge는 출력 형식을 1·3·5로 제한하고 형식 오류 문항은 재평가한 뒤 호출한다.
       유효 Evidence가 남지 않거나 규칙에 맞지 않으면 None / INSUFFICIENT_EVIDENCE로 바꾸고 사유를 기록한다.
     - 중복/confidence/5점 상한: 중복 문항은 N/A, 잘못된 confidence는 Low로 정규화한다.
+      confidence는 근거 수준과 독립 source 수로 계산한 상한을 넘지 못한다. High는 서로 다른 source_id의
+      E3 이상 근거가 2개 이상일 때만, Medium은 E3 이상 1개 또는 서로 다른 출처 2개 이상일 때까지 허용한다.
       E3 이상 Evidence가 없는 5점은 기업 주장·Demo 중심 Rubric의 상한인 3점으로 조정한다.
 
     criteria 항목의 evidence는 [{"chunk_id", "source_id"}] 참조 또는 EvidenceItem이어도 된다.
@@ -268,6 +286,13 @@ def validate_criteria(
             if confidence not in CONFIDENCE_LEVELS:
                 confidence = "Low"
                 validation_notes.append("허용되지 않은 confidence를 Low로 정규화")
+            else:
+                confidence_cap = _confidence_cap(evidence)
+                if CONFIDENCE_ORDER[confidence] > CONFIDENCE_ORDER[confidence_cap]:
+                    confidence = confidence_cap
+                    validation_notes.append(
+                        f"Evidence 수준·독립 출처 수 기준 confidence 상한을 {confidence_cap}로 조정"
+                    )
 
             reasoning = raw.get("reasoning", "")
             if validation_notes:

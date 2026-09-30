@@ -4,14 +4,16 @@
 평가한다. 신규 검색, 최종 점수 계산, 투자판정은 LLM에 맡기지 않는다.
 """
 
+import hashlib
+import json
 from collections import Counter
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 from core.judge_logging import log_criteria, log_decision, log_repair_issues, log_stage
-from core.llm import get_structured_llm
-from core.state import InvestmentResult, InvestmentState
+from core.llm import get_llm_settings, get_structured_llm
+from core.state import InvestmentResult, InvestmentState, JudgeRunMetadata
 from evaluation.criteria import (
     ALLOWED_SCORES,
     CONFIDENCE_LEVELS,
@@ -19,7 +21,10 @@ from evaluation.criteria import (
     decide,
     validate_criteria,
 )
-from prompts.investment_judge import build_judge_messages
+from evaluation.judge_input import JudgeEvidenceContext, validate_and_build_evidence_context
+from prompts.investment_judge import JUDGE_PROMPT_VERSION, build_judge_messages
+
+JUDGE_RUN_SCHEMA_VERSION = "1"
 
 
 class EvidenceRefOutput(BaseModel):
@@ -50,15 +55,6 @@ class JudgeBatchOutput(BaseModel):
     key_risks: list[SummaryClaimOutput] = Field(default_factory=list)
 
 
-def _available_evidence(state: InvestmentState, company: str) -> dict[str, dict]:
-    """앞선 Agent가 현재 기업에 대해 실제로 전달한 Evidence (chunk_id → EvidenceItem)."""
-    evidence: dict[str, dict] = {}
-    for results in (state["technology_results"], state["market_traction_results"]):
-        for item in results.get(company, {}).get("evidence", []):
-            evidence[item["chunk_id"]] = item
-    return evidence
-
-
 def _as_dict(value: Any) -> dict:
     if isinstance(value, BaseModel):
         return value.model_dump()
@@ -77,6 +73,7 @@ def _criterion_issues(
     assessments: list[dict],
     available_evidence: dict[str, dict],
     expected_ids: set[str],
+    allowed_evidence_by_criterion: dict[str, set[tuple[str, str]]] | None = None,
 ) -> dict[str, list[str]]:
     """보정 호출이 필요한 문항과 검증 실패 사유를 찾는다."""
     counts = Counter(item.get("criterion_id") for item in assessments)
@@ -103,7 +100,17 @@ def _criterion_issues(
                     invalid_refs.append(ref)
                     continue
                 item = available_evidence.get(ref.get("chunk_id"))
-                if item and item.get("source_id") == ref.get("source_id"):
+                evidence_key = (ref.get("chunk_id"), ref.get("source_id"))
+                allowed_refs = (
+                    allowed_evidence_by_criterion.get(criterion_id, set())
+                    if allowed_evidence_by_criterion is not None
+                    else None
+                )
+                if (
+                    item
+                    and item.get("source_id") == ref.get("source_id")
+                    and (allowed_refs is None or evidence_key in allowed_refs)
+                ):
                     valid_items.append(item)
                 else:
                     invalid_refs.append(ref)
@@ -121,7 +128,7 @@ def _criterion_issues(
                 reasons.append(f"허용되지 않은 status: {status!r}")
 
             if invalid_refs:
-                reasons.append("존재하지 않거나 source_id가 불일치하는 Evidence 참조")
+                reasons.append("존재하지 않거나 source_id·문항 허용 범위가 불일치하는 Evidence 참조")
             if confidence not in CONFIDENCE_LEVELS:
                 reasons.append(f"허용되지 않은 confidence: {confidence!r}")
             if score == 5 and not any(
@@ -145,50 +152,211 @@ def _merge_repair(
     return kept + replacements
 
 
-def _invoke_judge(messages: list[tuple[str, str]]) -> dict:
-    response = get_structured_llm(JudgeBatchOutput).invoke(messages)
+def _normalize_repaired_status(
+    repaired: list[dict],
+    available_evidence: dict[str, dict],
+    allowed_evidence_by_criterion: dict[str, set[tuple[str, str]]],
+) -> tuple[list[dict], list[str]]:
+    """1회 재평가 뒤 남은 score/status 모순만 기계적으로 정규화한다.
+
+    LLM이 유효한 1/3/5점과 허용 Evidence를 함께 반환하면서 status만
+    INSUFFICIENT_EVIDENCE로 둔 경우, 점수나 근거를 새로 만들지 않고 status를
+    SCORED로 맞춘다. Evidence가 없거나 문항 범위를 벗어나면 정규화하지 않아
+    최종 Python 검증에서 N/A가 된다.
+    """
+    normalized: list[dict] = []
+    normalized_ids: list[str] = []
+
+    for raw in repaired:
+        item = dict(raw)
+        criterion_id = item.get("criterion_id")
+        score = item.get("score")
+        refs = item.get("evidence") if isinstance(item.get("evidence"), list) else []
+        allowed_refs = allowed_evidence_by_criterion.get(criterion_id, set())
+        has_valid_evidence = any(
+            isinstance(ref, dict)
+            and (ref.get("chunk_id"), ref.get("source_id")) in allowed_refs
+            and available_evidence.get(ref.get("chunk_id"), {}).get("source_id")
+            == ref.get("source_id")
+            for ref in refs
+        )
+
+        if (
+            item.get("status") == "INSUFFICIENT_EVIDENCE"
+            and isinstance(score, int)
+            and not isinstance(score, bool)
+            and score in ALLOWED_SCORES
+            and has_valid_evidence
+        ):
+            item["status"] = "SCORED"
+            note = "[Python 형식 정규화: 유효한 score와 Evidence에 맞춰 status를 SCORED로 조정]"
+            item["reasoning"] = f"{note} {item.get('reasoning', '')}".strip()
+            normalized_ids.append(str(criterion_id))
+
+        normalized.append(item)
+
+    return normalized, normalized_ids
+
+
+def _canonical_fingerprint(value: object) -> str:
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _invoke_judge(
+    messages: list[tuple[str, str]],
+    *,
+    company: str,
+    phase: str,
+    prompt_fingerprint: str,
+) -> dict:
+    response = get_structured_llm(JudgeBatchOutput).invoke(
+        messages,
+        config={
+            "run_name": f"investment_judge_{phase}",
+            "metadata": {
+                "company": company,
+                "phase": phase,
+                "prompt_version": JUDGE_PROMPT_VERSION,
+                "prompt_fingerprint": prompt_fingerprint,
+                **get_llm_settings(),
+            },
+        },
+    )
     return _as_dict(response)
+
+
+def _judge_run_metadata(
+    prompt_fingerprints: list[str],
+    response_fingerprints: list[str],
+    repaired_criterion_ids: list[str],
+) -> JudgeRunMetadata:
+    settings = get_llm_settings()
+    return {
+        "schema_version": JUDGE_RUN_SCHEMA_VERSION,
+        "prompt_version": JUDGE_PROMPT_VERSION,
+        "model_provider": str(settings["model_provider"]),
+        "model": str(settings["model"]),
+        "temperature": settings["temperature"],
+        "seed": int(settings["seed"]),
+        "input_fingerprint": prompt_fingerprints[0],
+        "prompt_fingerprints": prompt_fingerprints,
+        "response_fingerprints": response_fingerprints,
+        "llm_call_count": len(prompt_fingerprints),
+        "repaired_criterion_ids": repaired_criterion_ids,
+    }
 
 
 def _llm_score_criteria(
     state: InvestmentState,
     company: str,
-    evidence: dict[str, dict],
+    evidence_context: JudgeEvidenceContext,
 ) -> dict:
     """12문항 일괄 평가 후 문제가 있는 문항만 최대 한 번 보정한다."""
     expected_ids = set(CRITERIA_BY_ID)
-    evidence_items = list(evidence.values())
+    available_evidence = evidence_context.available_evidence
+    allowed_evidence_by_criterion = evidence_context.allowed_evidence_by_criterion
+    own_evidence_items = list(evidence_context.own_evidence.values())
+    competition_evidence_items = evidence_context.competition_prompt_items()
 
     # 현재는 비용·지연을 줄이기 위해 12문항을 한 번에 평가한다. 실제 평가에서 긴 Context로
     # 문항 누락·상호간섭이 반복되면 이 호출 경계를 문항별 12회 호출로 바꿀 수 있다.
     log_stage(company, "LLM", "12개 평가 문항 일괄 호출")
-    initial = _invoke_judge(build_judge_messages(state, company, evidence_items))
+    initial_messages = build_judge_messages(
+        state,
+        company,
+        own_evidence_items,
+        competition_evidence=competition_evidence_items,
+    )
+    initial_fingerprint = _canonical_fingerprint(initial_messages)
+    prompt_fingerprints = [initial_fingerprint]
+    settings = get_llm_settings()
+    log_stage(
+        company,
+        "REPRO",
+        (
+            f"prompt={JUDGE_PROMPT_VERSION} | model={settings['model']} | "
+            f"temperature={settings['temperature']} | seed={settings['seed']} | "
+            f"input_sha256={initial_fingerprint}"
+        ),
+    )
+    initial = _invoke_judge(
+        initial_messages,
+        company=company,
+        phase="initial",
+        prompt_fingerprint=initial_fingerprint,
+    )
+    response_fingerprints = [_canonical_fingerprint(initial)]
+    log_stage(company, "REPRO", f"response_sha256={response_fingerprints[0]}")
     initial_criteria = _as_dict_list(initial.get("criteria"))
     log_criteria(company, "LLM 최초 평가", initial_criteria)
-    issues = _criterion_issues(initial_criteria, evidence, expected_ids)
+    issues = _criterion_issues(
+        initial_criteria,
+        available_evidence,
+        expected_ids,
+        allowed_evidence_by_criterion,
+    )
     if not issues:
         return {
             "criteria": initial_criteria,
             "key_strengths": _as_dict_list(initial.get("key_strengths")),
             "key_risks": _as_dict_list(initial.get("key_risks")),
+            "judge_run": _judge_run_metadata(prompt_fingerprints, response_fingerprints, []),
         }
 
     issue_ids = set(issues)
+    ordered_issue_ids = [criterion_id for criterion_id in CRITERIA_BY_ID if criterion_id in issue_ids]
     log_repair_issues(company, issues)
     log_stage(company, "REPAIR", f"문제 문항 {len(issue_ids)}개만 1회 재평가")
-    previous = [item for item in initial_criteria if item.get("criterion_id") in issue_ids]
-    repair = _invoke_judge(
-        build_judge_messages(
-            state,
-            company,
-            evidence_items,
-            criterion_ids=issue_ids,
-            repair_issues=issues,
-            previous_assessments=previous,
-        )
+    previous_by_id = {
+        item.get("criterion_id"): item
+        for item in initial_criteria
+        if item.get("criterion_id") in issue_ids
+    }
+    previous = [
+        previous_by_id[criterion_id]
+        for criterion_id in ordered_issue_ids
+        if criterion_id in previous_by_id
+    ]
+    repair_messages = build_judge_messages(
+        state,
+        company,
+        own_evidence_items,
+        competition_evidence=competition_evidence_items,
+        criterion_ids=issue_ids,
+        repair_issues={criterion_id: issues[criterion_id] for criterion_id in ordered_issue_ids},
+        previous_assessments=previous,
     )
+    repair_fingerprint = _canonical_fingerprint(repair_messages)
+    prompt_fingerprints.append(repair_fingerprint)
+    log_stage(company, "REPRO", f"repair_sha256={repair_fingerprint}")
+    repair = _invoke_judge(
+        repair_messages,
+        company=company,
+        phase="repair",
+        prompt_fingerprint=repair_fingerprint,
+    )
+    response_fingerprints.append(_canonical_fingerprint(repair))
+    log_stage(company, "REPRO", f"repair_response_sha256={response_fingerprints[-1]}")
     repaired_criteria = _as_dict_list(repair.get("criteria"))
     log_criteria(company, "LLM 재평가", repaired_criteria)
+    repaired_criteria, normalized_ids = _normalize_repaired_status(
+        repaired_criteria,
+        available_evidence,
+        allowed_evidence_by_criterion,
+    )
+    if normalized_ids:
+        log_stage(
+            company,
+            "NORMALIZE",
+            f"재평가 score/status 형식 정규화: {', '.join(normalized_ids)}",
+        )
     return {
         "criteria": _merge_repair(initial_criteria, repaired_criteria, issue_ids),
         "key_strengths": [
@@ -199,6 +367,11 @@ def _llm_score_criteria(
             *_as_dict_list(initial.get("key_risks")),
             *_as_dict_list(repair.get("key_risks")),
         ],
+        "judge_run": _judge_run_metadata(
+            prompt_fingerprints,
+            response_fingerprints,
+            ordered_issue_ids,
+        ),
     }
 
 
@@ -252,16 +425,24 @@ def investment_judge_node(state: InvestmentState) -> dict:
     if not company:
         raise ValueError("Investment Judge 실행 전에 current_company가 설정되어야 합니다.")
 
-    evidence = _available_evidence(state, company)
+    evidence_context = validate_and_build_evidence_context(state, company)
+    available_evidence = evidence_context.available_evidence
+    allowed_evidence = evidence_context.allowed_evidence_by_criterion
     technology_count = len(state["technology_results"].get(company, {}).get("evidence", []))
     market_count = len(state["market_traction_results"].get(company, {}).get("evidence", []))
     log_stage(
         company,
         "START",
-        f"technology_evidence={technology_count} | market_evidence={market_count} | unique={len(evidence)}",
+        (
+            f"technology_evidence={technology_count} | market_evidence={market_count} | "
+            f"competition_q4_evidence={len(evidence_context.competition_by_criterion['B04'])} | "
+            f"competition_q9_evidence={len(evidence_context.competition_by_criterion['B09'])} | "
+            f"unclassified_excluded={len(evidence_context.excluded_evidence_ids)} | "
+            f"competition_refs_excluded={len(evidence_context.excluded_competition_refs)}"
+        ),
     )
-    llm_result = _llm_score_criteria(state, company, evidence)
-    criteria = validate_criteria(llm_result["criteria"], evidence)
+    llm_result = _llm_score_criteria(state, company, evidence_context)
+    criteria = validate_criteria(llm_result["criteria"], available_evidence, allowed_evidence)
     log_criteria(company, "Python 검증 후 최종 평가", criteria)
     verdict = decide({criterion["criterion_id"]: criterion["score"] for criterion in criteria})
 
@@ -275,6 +456,7 @@ def investment_judge_node(state: InvestmentState) -> dict:
         "missing_information": _deduplicate(
             [missing for criterion in criteria for missing in criterion["missing_information"]]
         ),
+        "judge_run": llm_result["judge_run"],
     }
     log_decision(company, result)
     completed = state["completed_companies"]

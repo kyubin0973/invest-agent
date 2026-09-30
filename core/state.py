@@ -15,6 +15,7 @@ from typing import Annotated, Literal, TypedDict
 # ---------------------------------------------------------------------------
 EvidenceLevel = Literal["E0", "E1", "E2", "E3", "E4", "E5"]
 Confidence = Literal["High", "Medium", "Low"]
+CompetitionCriterion = Literal["B04", "B09"]
 CriterionStatus = Literal["SCORED", "INSUFFICIENT_EVIDENCE"]
 Decision = Literal["INVEST", "HOLD", "HOLD_INSUFFICIENT_EVIDENCE"]
 
@@ -62,6 +63,7 @@ class AnalysisResult(TypedDict):
 
 class Comparison(TypedDict):
     dimension: str  # 기술, 제품, AI/Data, 기술 성숙도, 상용화, 제조·배치 확장성, 시장전략, 차별성, Risk
+    criterion_ids: list[CompetitionCriterion]  # 이 비교 Evidence를 사용할 수 있는 Judge 문항
     company_findings: dict[str, str]  # 기업명 → 비교축별 Finding
     evidence_refs: list[EvidenceRef]
 
@@ -84,6 +86,20 @@ class CriterionResult(TypedDict):
     missing_information: list[str]
 
 
+class JudgeRunMetadata(TypedDict):
+    schema_version: str
+    prompt_version: str
+    model_provider: str
+    model: str
+    temperature: int | float
+    seed: int
+    input_fingerprint: str  # 최초 호출 전체 메시지의 SHA-256
+    prompt_fingerprints: list[str]  # 최초 호출과 선택적 보정 호출 순서
+    response_fingerprints: list[str]  # LLM 구조화 응답의 canonical SHA-256
+    llm_call_count: int
+    repaired_criterion_ids: list[str]
+
+
 class InvestmentResult(TypedDict):
     criteria: list[CriterionResult]  # N/A 문항을 포함해 항상 12개
     final_score: float | None
@@ -93,6 +109,7 @@ class InvestmentResult(TypedDict):
     key_strengths: list[str]
     key_risks: list[str]
     missing_information: list[str]
+    judge_run: JudgeRunMetadata
 
 
 class Eligibility(TypedDict):
