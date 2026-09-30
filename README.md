@@ -127,4 +127,4 @@ uv run python app.py                 # 전체 실행 → outputs/report_*.md
 - 박진근 : Technology & Product Agent
 - 윤서진 : Competition Agent, Report Generator
 - 정지우 : Investment Judge Agent, 평가 기준 검증
-- 강지훈 : (역할 기입)
+- 강지훈 : RAG 문서 생성 및 기업 조사, 검증
