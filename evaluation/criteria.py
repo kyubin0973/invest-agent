@@ -173,12 +173,18 @@ def criteria_for(agent: str) -> list[Criterion]:
     return [c for c in CRITERIA if agent in c.agents]
 
 
-def validate_criteria(criteria: list[dict], available_evidence: dict[str, dict]) -> list[dict]:
+def validate_criteria(
+    criteria: list[dict],
+    available_evidence: dict[str, dict],
+    allowed_evidence_by_criterion: dict[str, set[tuple[str, str]]] | None = None,
+) -> list[dict]:
     """LLM이 낸 문항별 결과를 Python으로 검증한다 (설계 3.4, 21쪽본 5.5).
 
     - 문항 완전성: 12문항이 각 1개씩. 누락 문항은 INSUFFICIENT_EVIDENCE / score=None으로 채운다.
     - Evidence ID: 앞선 Agent가 실제 검색해 전달한 Evidence(available_evidence, chunk_id → EvidenceItem)에
       존재하고 source_id가 일치하는 참조만 남긴다. LLM이 쓴 Metadata 대신 원본 EvidenceItem을 연결한다.
+      allowed_evidence_by_criterion이 주어지면 문항별 허용 범위도 확인한다. 이를 통해 Competition의 타사
+      Evidence는 Q4(B04)·Q9(B09)에만 허용하고 다른 문항으로 섞이지 않게 할 수 있다.
     - score/status: SCORED면 1·3·5 중 하나, INSUFFICIENT_EVIDENCE면 None.
       허용되지 않은 점수(2·4점 등)는 '형식 오류'로 기록해 근거 부족과 구분한다.
       이 처리는 최후의 안전장치이며, Judge는 출력 형식을 1·3·5로 제한하고 형식 오류 문항은 재평가한 뒤 호출한다.
@@ -217,7 +223,17 @@ def validate_criteria(criteria: list[dict], available_evidence: dict[str, dict])
                 continue
             item = available_evidence.get(ref.get("chunk_id"))
             evidence_key = (ref.get("chunk_id"), ref.get("source_id"))
-            if item and item["source_id"] == ref.get("source_id") and evidence_key not in seen_evidence:
+            allowed_refs = (
+                allowed_evidence_by_criterion.get(crit.id, set())
+                if allowed_evidence_by_criterion is not None
+                else None
+            )
+            if (
+                item
+                and item["source_id"] == ref.get("source_id")
+                and (allowed_refs is None or evidence_key in allowed_refs)
+                and evidence_key not in seen_evidence
+            ):
                 evidence.append(item)
                 seen_evidence.add(evidence_key)
 
