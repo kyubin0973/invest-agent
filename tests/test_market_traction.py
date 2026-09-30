@@ -75,6 +75,17 @@ class ValidateTest(unittest.TestCase):
         self.assertEqual(result["findings"][0]["dimension"], "제조 파트너·원가·Fleet 운영")
         self.assertEqual(answered, {"SQ10"})
 
+    def test_not_found_statement_moves_to_missing(self):
+        docs = {"X5_P01_C01": _doc("X5_P01_C01", "NEO home robot.", company="1x")}
+        result, answered = _validate(
+            _out(FindingOut(question_id="SQ06", dimension="고객검증·배치·계약", statement="고객 계약 정보는 확인되지 않았다.", evidence_chunk_ids=["X5_P01_C01"])),
+            docs,
+            "1x",
+        )
+        self.assertEqual(result["findings"], [])
+        self.assertIn("고객 계약 정보는 확인되지 않았다.", result["missing_information"])
+        self.assertEqual(answered, set())
+
     def test_company_dimension_rejects_market_report(self):
         docs = {"M5_P02_C01": _doc("M5_P02_C01", "Supply chain constraints.", company="", source_type="industry_report")}
         result, _ = _validate(

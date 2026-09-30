@@ -21,6 +21,7 @@
 - 공개 Team·Founder·가격 정보가 부족하면 추정하지 않는다 (해당 문항은 Judge가 N/A 처리).
 """
 
+import logging
 import re
 from dataclasses import dataclass
 from typing import Literal
@@ -46,7 +47,15 @@ from rag.retriever import search, search_industry, to_evidence
 MARKET_K = 3  # 공통 시장자료: 여러 하위 질문에서 겹치므로 적게
 COMPANY_K = 4  # 기업 자료: 일반 검색
 COMPANY_TYPE_K = 5  # 기업 자료: 하위 질문에 맞는 document_type으로 좁힌 검색 (설계 2.2.2)
-DEFAULT_MARKET = "general-purpose humanoid robots"
+# 시장 질문 검색어: 공통 시장자료는 휴머노이드 전반을 다루므로 Target Market(예: 가정용)으로 좁히지 않는다.
+# Target Market은 분석 단계에서 해석에만 쓴다 (좁히면 충분성 판단에서 시장 근거가 모두 '부족'이 됨).
+SEARCH_MARKET = "general-purpose humanoid robots"
+
+# 내부 검증 기록은 State(missing_information)에 넣지 않고 로그로만 남긴다 (보고서에 노출되지 않도록).
+logger = logging.getLogger(__name__)
+
+# '확인되지 않음'류 문장은 분석 판단이 아니라 부족한 정보다 → finding에서 빼고 missing_information으로 옮긴다.
+NOT_FOUND = re.compile(r"확인되지 않|확인할 수 없|공개되지 않|알 수 없|정보가 부족|근거가 부족|정보는 없|근거는 없|언급되지 않")
 
 # 기업 단독 발표는 외부 확인 전까지 E1~E2, 파트너 발표는 외부 확인(E3) 이상 (설계 3.3 Evidence Level 규칙)
 MAX_LEVEL_BY_SOURCE = {"company": "E2"}
@@ -220,6 +229,7 @@ def _dimension_for(question_id: str, dimension: str) -> str:
 def _validate(out: MarketAnalysisOut, docs: dict[str, Document], company_key: str) -> tuple[AnalysisResult, set[str]]:
     """LLM 출력을 검색 결과와 대조해 AnalysisResult와 finding이 남은 하위 질문 ID를 돌려준다."""
     notes: list[str] = []
+    missing: list[str] = []
     answered: set[str] = set()
 
     evidence: dict[str, EvidenceItem] = {}
@@ -244,6 +254,9 @@ def _validate(out: MarketAnalysisOut, docs: dict[str, Document], company_key: st
         if dimension in COMPANY_SPECIFIC_DIMENSIONS:
             # 기업 고유 분석축은 현재 기업 자료로만 뒷받침한다 (Market Evidence ≠ Company Evidence)
             ids = [c for c in ids if docs[c].metadata["company"] == company_key]
+        if NOT_FOUND.search(f.statement):
+            missing.append(_clean(f.statement))
+            continue
         if not ids:
             notes.append(f"유효한 근거가 없어 제외한 판단 ({dimension}): {f.statement}")
             continue
@@ -259,12 +272,14 @@ def _validate(out: MarketAnalysisOut, docs: dict[str, Document], company_key: st
             "evidence_refs": [{"chunk_id": c, "source_id": docs[c].metadata["source_id"]} for c in ids],
         })
 
+    for n in notes:
+        logger.info(n)
     return {
         "summary": out.summary,
         "findings": findings,
         "evidence": list(evidence.values()),
         "risks": out.risks,
-        "missing_information": list(dict.fromkeys(out.missing_information + notes)),
+        "missing_information": list(dict.fromkeys(out.missing_information + missing)),
     }, answered
 
 
@@ -287,7 +302,7 @@ def _merge(base: AnalysisResult, extra: AnalysisResult) -> AnalysisResult:
 # ---------------------------------------------------------------------------
 def analyze_market_traction(company: str, profile: dict) -> AnalysisResult:
     key = company_key(company)
-    market = profile.get("target_market") or DEFAULT_MARKET
+    market = SEARCH_MARKET
 
     # 2. 검색
     docs: dict[str, Document] = {}
@@ -334,10 +349,13 @@ def analyze_market_traction(company: str, profile: dict) -> AnalysisResult:
     # 5. 분석 (LLM 1회) + 6. 검증 (코드)
     result, answered = _validate(_analyze(company, profile, questions, gaps, docs, system), docs, key)
 
-    # 5-1. 보완 분석 (LLM 최대 1회): 충분성 확인을 통과했는데 finding이 없는 기업 하위 질문만 다시 분석한다.
-    #      기업 고유 문항(Q6·Q7·Q12 등)은 기업 자료 finding이 없으면 Judge가 N/A로 처리하기 때문이다.
-    #      근거 부족 질문은 억지로 채우지 않는다 (Missing Evidence ≠ Negative Evidence).
-    retry = [q for q in questions if q["scope"] == "company" and q["sufficient"] and q["id"] not in answered]
+    # 5-1. 보완 분석 (LLM 최대 1회): finding이 빠진 하위 질문만 다시 분석한다.
+    #      시장 질문은 공통 시장자료로 항상 답할 수 있으므로 모두 대상, 기업 질문은 충분성을 통과한 것만 대상.
+    #      근거 부족 기업 질문은 억지로 채우지 않는다 (Missing Evidence ≠ Negative Evidence).
+    retry = [
+        q for q in questions
+        if q["chunk_ids"] and q["id"] not in answered and (q["scope"] == "market" or q["sufficient"])
+    ]
     if retry:
         retry_docs = {c: docs[c] for q in retry for c in q["chunk_ids"]}
         extra, extra_answered = _validate(
@@ -348,7 +366,7 @@ def analyze_market_traction(company: str, profile: dict) -> AnalysisResult:
 
     skipped = [q["id"] for q in questions if q["chunk_ids"] and q["id"] not in answered]
     if skipped:
-        result["missing_information"].append(f"근거는 검색됐으나 분석되지 않은 하위 질문: {', '.join(skipped)}")
+        logger.info("[%s] 근거는 검색됐으나 분석되지 않은 하위 질문: %s", company, ", ".join(skipped))
 
     # 7. 근거 대조 (LLM 1회): 과장은 원문에 맞게 고치고, 근거 없는 문장은 제외
     return _ground(result, docs, company, system)
@@ -402,13 +420,15 @@ def _ground(result: AnalysisResult, docs: dict[str, Document], company: str, sys
         else:
             notes.append(f"근거와 맞지 않아 제외한 판단 ({f['dimension']}): {f['statement']}")
 
+    for n in notes:
+        logger.info("[%s] %s", company, n)
+
     # 남은 판단이 인용한 근거만 유지한다 (REFERENCE에 실제 사용 출처만 남도록)
     used = {r["chunk_id"] for f in kept for r in f["evidence_refs"]}
     return {
         **result,
         "findings": kept,
         "evidence": [e for e in result["evidence"] if e["chunk_id"] in used],
-        "missing_information": list(dict.fromkeys(result["missing_information"] + notes)),
     }
 
 

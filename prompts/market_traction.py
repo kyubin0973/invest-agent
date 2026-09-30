@@ -58,7 +58,7 @@ def analysis_request(company: str, target_market: str | None, questions: list[di
     """시장·Traction 분석 요청. 하위 질문별 근거 대응표를 함께 준다."""
     gap_text = "\n".join(f"- {g}" for g in gaps) or "- 없음"
     q_text = "\n".join(
-        f"- {q['id']} ({q['scope']}, {'근거 충분' if q.get('sufficient') else '근거 부족'}) [분석축: {' / '.join(q['dimensions'])}]: "
+        f"- {q['id']} ({q['scope']}, {'근거 충분' if q.get('sufficient') or q['scope'] == 'market' else '근거 부족'}) [분석축: {' / '.join(q['dimensions'])}]: "
         f"{q['query']} → {', '.join(q['chunk_ids']) or '근거 없음'}"
         for q in questions
     )
@@ -78,6 +78,8 @@ Target Market (사전 입력): {target_market or '미입력'}
   statement는 구체적 사실(수치·고객명·파트너명·조건)을 담은 1~2문장이며, 기업 자료의 내용은 기업 주장임을 드러낸다.
   statement 안에는 chunk_id를 쓰지 않는다 (근거는 evidence_chunk_ids에만).
   evidence_chunk_ids에는 그 판단의 근거 chunk_id를 넣는다 (위 근거 목록에 있는 것만).
+  finding은 근거에 있는 사실만 쓴다. '확인되지 않음·정보 부족'은 finding이 아니라 missing_information에 쓴다.
+  시장(market) 질문은 공통 시장자료로 답하고, Target Market과 다른 시장을 다룬 자료면 그 점을 문장에 밝힌다.
   질문에 답하지 못하는 근거로 finding을 채우지 않는다 (주제만 관련 있는 내용을 다른 분석축에 옮겨 쓰지 않는다).
 - evidence: findings에서 사용한 근거(chunk_id)마다 evidence_level과 fact(근거가 말하는 사실 1문장)를 적는다.
   evidence_level: E1 기업 주장·계획 / E2 시연·제한 환경 / E3 외부 확인 / E4 외부 확인된 실제 운영·계약 / E5 반복·규모화
