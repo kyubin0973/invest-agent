@@ -1,20 +1,32 @@
 {
   "Figure AI": {
-    "target_market": null,
-    "funding_stage": null,
-    "eligibility": {"is_private": null, "exit_completed": null, "evaluation_date": null},
-    "source_refs": {}
+    "target_market": "산업용 (자동차 제조·물류 공정), 가정용 확장 준비",
+    "funding_stage": "Series C (2025-09, $1B+, post-money $39B)",
+    "eligibility": {"is_private": true, "exit_completed": false, "evaluation_date": "2026-09-30"},
+    "source_refs": {
+      "target_market": "F4, F5, F3",
+      "funding_stage": "https://www.figure.ai/news/series-c",
+      "eligibility": "https://www.figure.ai/news/series-c"
+    }
   },
   "Apptronik": {
-    "target_market": null,
-    "funding_stage": null,
-    "eligibility": {"is_private": null, "exit_completed": null, "evaluation_date": null},
-    "source_refs": {}
+    "target_market": "산업용 (제조·물류 현장 물품 이송, 반복 작업)",
+    "funding_stage": "Series A (2026-02 확장 포함 누적 $935M+, 기업가치 $5B+)",
+    "eligibility": {"is_private": true, "exit_completed": false, "evaluation_date": "2026-09-30"},
+    "source_refs": {
+      "target_market": "A2, A5",
+      "funding_stage": "https://apptronik.com/news-collection/apptronik-closes-over-935-million-series-a",
+      "eligibility": "https://apptronik.com/news-collection/apptronik-closes-over-935-million-series-a"
+    }
   },
   "1X Technologies": {
-    "target_market": null,
-    "funding_stage": null,
-    "eligibility": {"is_private": null, "exit_completed": null, "evaluation_date": null},
-    "source_refs": {}
+    "target_market": "가정용 (가사 보조·일상 지원)",
+    "funding_stage": "Series B (2024-01, $100M)",
+    "eligibility": {"is_private": true, "exit_completed": false, "evaluation_date": "2026-09-30"},
+    "source_refs": {
+      "target_market": "X5",
+      "funding_stage": "https://www.1x.tech/discover/1x-secures-100m-in-series-b-funding",
+      "eligibility": "https://www.1x.tech/discover/1x-secures-100m-in-series-b-funding"
+    }
   }
 }

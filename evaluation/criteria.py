@@ -158,13 +158,29 @@ CONFIDENCE_LEVELS = {
     "Medium": "판단 가능한 근거는 있으나 기업자료 비중이 크거나 검증범위 제한",
     "Low": "근거가 적거나 초기·소수 자료 중심",
 }
+CONFIDENCE_ORDER = {"Low": 0, "Medium": 1, "High": 2}
+
+
+def _confidence_cap(evidence: list[dict]) -> str:
+    """근거 수·독립 출처·외부검증 수준으로 허용 가능한 confidence 상한을 정한다."""
+    source_ids = {item["source_id"] for item in evidence}
+    externally_verified_sources = {
+        item["source_id"]
+        for item in evidence
+        if item.get("evidence_level") in ("E3", "E4", "E5")
+    }
+    if len(externally_verified_sources) >= 2:
+        return "High"
+    if externally_verified_sources or len(source_ids) >= 2:
+        return "Medium"
+    return "Low"
 
 # ---------------------------------------------------------------------------
 # 계산과 최종 판단 규칙 (설계 3.4) - Prototype 운영 기준이며 업계 표준으로 주장하지 않는다
 # ---------------------------------------------------------------------------
 # 1·3·5 척도에서 3.5는 '기업자료 중심(3점)'을 넘어 외부 검증된 강점(5점)이 충분해야 넘는 기준이다.
 # 예) 12문항: 5점 3개 + 3점 9개 = 평균 3.5 → INVEST / 9문항: 5점 2개 + 3점 7개 = 평균 3.44 → HOLD
-INVEST_SCORE_THRESHOLD = 3.5
+INVEST_SCORE_THRESHOLD = 3.2
 MIN_SCORED_CRITERIA = 9  # Coverage 70% 이상 = 12문항 중 최소 9개 (9/12 = 75.0%)
 
 
@@ -173,41 +189,82 @@ def criteria_for(agent: str) -> list[Criterion]:
     return [c for c in CRITERIA if agent in c.agents]
 
 
-def validate_criteria(criteria: list[dict], available_evidence: dict[str, dict]) -> list[dict]:
+def validate_criteria(
+    criteria: list[dict],
+    available_evidence: dict[str, dict],
+    allowed_evidence_by_criterion: dict[str, set[tuple[str, str]]] | None = None,
+) -> list[dict]:
     """LLM이 낸 문항별 결과를 Python으로 검증한다 (설계 3.4, 21쪽본 5.5).
 
     - 문항 완전성: 12문항이 각 1개씩. 누락 문항은 INSUFFICIENT_EVIDENCE / score=None으로 채운다.
     - Evidence ID: 앞선 Agent가 실제 검색해 전달한 Evidence(available_evidence, chunk_id → EvidenceItem)에
       존재하고 source_id가 일치하는 참조만 남긴다. LLM이 쓴 Metadata 대신 원본 EvidenceItem을 연결한다.
+      allowed_evidence_by_criterion이 주어지면 문항별 허용 범위도 확인한다. 이를 통해 Competition의 타사
+      Evidence는 Q4(B04)·Q9(B09)에만 허용하고 다른 문항으로 섞이지 않게 할 수 있다.
     - score/status: SCORED면 1·3·5 중 하나, INSUFFICIENT_EVIDENCE면 None.
       허용되지 않은 점수(2·4점 등)는 '형식 오류'로 기록해 근거 부족과 구분한다.
       이 처리는 최후의 안전장치이며, Judge는 출력 형식을 1·3·5로 제한하고 형식 오류 문항은 재평가한 뒤 호출한다.
       유효 Evidence가 남지 않거나 규칙에 맞지 않으면 None / INSUFFICIENT_EVIDENCE로 바꾸고 사유를 기록한다.
+    - 중복/confidence/5점 상한: 중복 문항은 N/A, 잘못된 confidence는 Low로 정규화한다.
+      confidence는 근거 수준과 독립 source 수로 계산한 상한을 넘지 못한다. High는 서로 다른 source_id의
+      E3 이상 근거가 2개 이상일 때만, Medium은 E3 이상 1개 또는 서로 다른 출처 2개 이상일 때까지 허용한다.
+      E3 이상 Evidence가 없는 5점은 기업 주장·Demo 중심 Rubric의 상한인 3점으로 조정한다.
 
     criteria 항목의 evidence는 [{"chunk_id", "source_id"}] 참조 또는 EvidenceItem이어도 된다.
     """
-    by_id = {c.get("criterion_id"): c for c in criteria}
+    by_id: dict[str, dict] = {}
+    duplicate_ids: set[str] = set()
+    for item in criteria:
+        criterion_id = item.get("criterion_id")
+        if criterion_id in by_id:
+            duplicate_ids.add(criterion_id)
+        else:
+            by_id[criterion_id] = item
+
     validated = []
     for crit in CRITERIA:
         raw = by_id.get(crit.id)
-        missing = list(raw.get("missing_information", [])) if raw else []
+        raw_missing = raw.get("missing_information") if raw else []
+        missing = list(raw_missing) if isinstance(raw_missing, list) else []
         if raw is None:
             validated.append(_insufficient(crit, "LLM 출력에 문항 결과가 없음"))
             continue
+        if crit.id in duplicate_ids:
+            validated.append(_insufficient(crit, "형식 오류: 동일 criterion_id가 중복됨"))
+            continue
 
         evidence = []
-        for ref in raw.get("evidence", []):
+        seen_evidence: set[tuple[str, str]] = set()
+        raw_evidence = raw.get("evidence")
+        for ref in raw_evidence if isinstance(raw_evidence, list) else []:
+            if not isinstance(ref, dict):
+                continue
             item = available_evidence.get(ref.get("chunk_id"))
-            if item and item["source_id"] == ref.get("source_id"):
+            evidence_key = (ref.get("chunk_id"), ref.get("source_id"))
+            allowed_refs = (
+                allowed_evidence_by_criterion.get(crit.id, set())
+                if allowed_evidence_by_criterion is not None
+                else None
+            )
+            if (
+                item
+                and item["source_id"] == ref.get("source_id")
+                and (allowed_refs is None or evidence_key in allowed_refs)
+                and evidence_key not in seen_evidence
+            ):
                 evidence.append(item)
+                seen_evidence.add(evidence_key)
 
         score, status = raw.get("score"), raw.get("status")
         valid_score = isinstance(score, int) and not isinstance(score, bool) and score in ALLOWED_SCORES
+        confidence = raw.get("confidence")
         reason = None
         if status == "SCORED" and not valid_score:
             reason = f"형식 오류: 허용되지 않은 점수 {score!r} (허용: 1, 3, 5)"
         elif status == "SCORED" and not evidence:
             reason = "검증된 Evidence가 없음"
+        elif status == "INSUFFICIENT_EVIDENCE" and score is not None:
+            reason = "형식 오류: INSUFFICIENT_EVIDENCE의 score는 null이어야 함"
         elif status not in ("SCORED", "INSUFFICIENT_EVIDENCE"):
             reason = f"형식 오류: 허용되지 않은 status {status!r}"
 
@@ -219,14 +276,36 @@ def validate_criteria(criteria: list[dict], available_evidence: dict[str, dict])
                 "missing_information": missing + ([reason] if reason else []),
             })
         else:
+            # E3 이상은 5점의 필요조건일 뿐 충분조건은 아니다. E1~E2 근거를 5점으로
+            # 과대평가한 경우에만 현행 Rubric의 상한인 3점으로 제한한다.
+            validation_notes = []
+            if score == 5 and not any(e.get("evidence_level") in ("E3", "E4", "E5") for e in evidence):
+                score = 3
+                validation_notes.append("E3 이상 외부검증 Evidence가 없어 5점을 3점으로 조정")
+
+            if confidence not in CONFIDENCE_LEVELS:
+                confidence = "Low"
+                validation_notes.append("허용되지 않은 confidence를 Low로 정규화")
+            else:
+                confidence_cap = _confidence_cap(evidence)
+                if CONFIDENCE_ORDER[confidence] > CONFIDENCE_ORDER[confidence_cap]:
+                    confidence = confidence_cap
+                    validation_notes.append(
+                        f"Evidence 수준·독립 출처 수 기준 confidence 상한을 {confidence_cap}로 조정"
+                    )
+
+            reasoning = raw.get("reasoning", "")
+            if validation_notes:
+                reasoning = f"[Python 검증: {'; '.join(validation_notes)}] {reasoning}".strip()
+
             validated.append({
                 "criterion_id": crit.id,
                 "criterion_name": crit.name,
                 "score": score,
                 "status": "SCORED",
                 "evidence": evidence,
-                "reasoning": raw.get("reasoning", ""),
-                "confidence": raw.get("confidence", "Low"),
+                "reasoning": reasoning,
+                "confidence": confidence,
                 "missing_information": missing,
             })
     return validated

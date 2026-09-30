@@ -1,0 +1,185 @@
+{
+  "summary": "1X Technologies는 가정용 로봇 시장에서 혁신적인 제품인 NEO를 출시하며, 시장의 성장 가능성을 높이고 있다. 그러나, 시장의 성숙도와 기술적 도전 과제가 여전히 존재하며, 고객의 수요와 안전성 문제를 해결해야 한다.",
+  "findings": [
+    {
+      "dimension": "시장 규모·성장",
+      "statement": "전 세계 일반 목적의 휴머노이드 로봇 시장은 2035년까지 380억 달러에 이를 것으로 예상되며, 2025년에는 약 6,900대의 휴머노이드 로봇이 판매되었다고 한다.",
+      "evidence_refs": [
+        {
+          "chunk_id": "M3_P17_C01",
+          "source_id": "M3"
+        },
+        {
+          "chunk_id": "M2_P06_C01",
+          "source_id": "M2"
+        }
+      ]
+    },
+    {
+      "dimension": "고객 문제·Use Case",
+      "statement": "휴머노이드 로봇은 제조업, 물류, 소매업 등에서 인력 부족 문제를 해결할 수 있는 잠재력을 가지고 있다. 특히, 고위험 작업에서의 대체 수요가 증가하고 있다.",
+      "evidence_refs": [
+        {
+          "chunk_id": "M3_P17_C01",
+          "source_id": "M3"
+        },
+        {
+          "chunk_id": "M6_P03_C02",
+          "source_id": "M6"
+        }
+      ]
+    },
+    {
+      "dimension": "고객검증·배치·계약",
+      "statement": "1X Technologies는 NEO 로봇을 2026년부터 미국에서 우선적으로 배송할 예정이며, 초기 고객은 20,000달러에 사전 주문할 수 있다.",
+      "evidence_refs": [
+        {
+          "chunk_id": "X5_P01_C01",
+          "source_id": "X5"
+        },
+        {
+          "chunk_id": "X5_P02_C02",
+          "source_id": "X5"
+        }
+      ]
+    },
+    {
+      "dimension": "사업모델·가격",
+      "statement": "NEO는 20,000달러의 초기 구매 가격 또는 월 499달러의 구독 모델로 제공된다.",
+      "evidence_refs": [
+        {
+          "chunk_id": "X5_P02_C02",
+          "source_id": "X5"
+        },
+        {
+          "chunk_id": "X5_P01_C01",
+          "source_id": "X5"
+        }
+      ]
+    },
+    {
+      "dimension": "제조 파트너·원가·Fleet 운영",
+      "statement": "1X는 NEO의 손을 대량 생산할 수 있는 능력을 갖추고 있으며, 연간 10,000개의 손을 생산할 수 있다.",
+      "evidence_refs": [
+        {
+          "chunk_id": "X4_P03_C02",
+          "source_id": "X4"
+        }
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "source_id": "M3",
+      "chunk_id": "M3_P17_C01",
+      "page": 17,
+      "title": "The Global Market for Humanoid Robots Could Reach $38 Billion by 2035",
+      "publisher": "Goldman Sachs Research",
+      "published_date": "2024",
+      "source_type": "industry_report",
+      "reference_metadata": {
+        "reference_type": "report",
+        "url": "https://www.goldmansachs.com/pdfs/insights/pages/gs-research/global-automation-humanoid-robot-the-ai-accelerant/report.pdf",
+        "site_name": null,
+        "source_format": "original PDF (redacted source copy)"
+      },
+      "evidence_level": "E3",
+      "fact": "전 세계 일반 목적의 휴머노이드 로봇 시장은 2035년까지 380억 달러에 이를 것으로 예상된다."
+    },
+    {
+      "source_id": "M2",
+      "chunk_id": "M2_P06_C01",
+      "page": 6,
+      "title": "World Robotics 2026 – Service Robots Executive Summary",
+      "publisher": "IFR",
+      "published_date": "2026",
+      "source_type": "industry_report",
+      "reference_metadata": {
+        "reference_type": "report",
+        "url": "https://ifr.org/img/worldrobotics/Executive_Summary_WR_2026_-_Service_Robots.pdf",
+        "site_name": null,
+        "source_format": "original PDF"
+      },
+      "evidence_level": "E3",
+      "fact": "2025년에는 약 6,900대의 휴머노이드 로봇이 판매되었다."
+    },
+    {
+      "source_id": "M6",
+      "chunk_id": "M6_P03_C02",
+      "page": 3,
+      "title": "EDGE: Embodied AI and the Rise of Humanoid Robots",
+      "publisher": "Morgan Stanley Investment Management",
+      "published_date": "2026-01-09",
+      "source_type": "industry_report",
+      "reference_metadata": {
+        "reference_type": "report",
+        "url": "https://www.morganstanley.com/im/publication/insights/articles/article_humanoid-robots_a4.pdf",
+        "site_name": null,
+        "source_format": "original PDF"
+      },
+      "evidence_level": "E3",
+      "fact": "고위험 작업에서의 대체 수요가 증가하고 있다."
+    },
+    {
+      "source_id": "X5",
+      "chunk_id": "X5_P01_C01",
+      "page": 1,
+      "title": "1X NEO Home Robot | Order Today",
+      "publisher": "1X",
+      "published_date": "2025-10-28",
+      "source_type": "company",
+      "reference_metadata": {
+        "reference_type": "web",
+        "url": "https://www.1x.tech/discover/neo-home-robot",
+        "site_name": "1X",
+        "source_format": "official webpage converted to PDF"
+      },
+      "evidence_level": "E1",
+      "fact": "1X Technologies는 NEO 로봇을 2026년부터 미국에서 우선적으로 배송할 예정이다."
+    },
+    {
+      "source_id": "X5",
+      "chunk_id": "X5_P02_C02",
+      "page": 2,
+      "title": "1X NEO Home Robot | Order Today",
+      "publisher": "1X",
+      "published_date": "2025-10-28",
+      "source_type": "company",
+      "reference_metadata": {
+        "reference_type": "web",
+        "url": "https://www.1x.tech/discover/neo-home-robot",
+        "site_name": "1X",
+        "source_format": "official webpage converted to PDF"
+      },
+      "evidence_level": "E1",
+      "fact": "NEO는 20,000달러의 초기 구매 가격 또는 월 499달러의 구독 모델로 제공된다."
+    },
+    {
+      "source_id": "X4",
+      "chunk_id": "X4_P03_C02",
+      "page": 3,
+      "title": "NEO’s Hands | An API to the Physical World",
+      "publisher": "1X",
+      "published_date": "2026-07-09",
+      "source_type": "company",
+      "reference_metadata": {
+        "reference_type": "web",
+        "url": "https://www.1x.tech/discover/neos-hands",
+        "site_name": "1X",
+        "source_format": "official webpage converted to PDF"
+      },
+      "evidence_level": "E1",
+      "fact": "1X는 NEO의 손을 대량 생산할 수 있는 능력을 갖추고 있다."
+    }
+  ],
+  "risks": [
+    "AI 일반화 한계로 인한 제한된 적용 가능성",
+    "데이터 수집의 어려움과 품질 문제",
+    "기계적 신뢰성 문제로 인한 상용화 지연"
+  ],
+  "missing_information": [
+    "1X Technologies의 제조 파트너에 대한 구체적인 정보 없음",
+    "1X Technologies의 팀 구성 및 경영진에 대한 정보 없음",
+    "근거는 검색됐으나 분석되지 않은 하위 질문: SQ03, SQ04, SQ05, SQ07, SQ09"
+  ]
+}
