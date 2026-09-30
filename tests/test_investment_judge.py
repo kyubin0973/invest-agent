@@ -86,7 +86,7 @@ def make_state(evidence: dict | None = None) -> dict:
     }
 
 
-def add_competitor_evidence(state: dict) -> dict:
+def add_competitor_evidence(state: dict, criterion_ids: list[str] | None = None) -> dict:
     competitor = "Competitor Robotics"
     competitor_evidence = make_evidence("E3", "COMP_C01", "COMP")
     state["candidate_companies"].append(competitor)
@@ -112,9 +112,13 @@ def add_competitor_evidence(state: dict) -> dict:
         "risks": [],
         "missing_information": [],
     }
+    state["competition_result"]["target_market_context"][competitor] = "산업용"
+    state["competition_result"]["differentiation"][competitor] = "경쟁사 차별점"
+    state["competition_result"]["relative_risks"][competitor] = "경쟁사 리스크"
     state["competition_result"]["comparisons"] = [
         {
             "dimension": "차별성",
+            "criterion_ids": criterion_ids or ["B04"],
             "company_findings": {
                 "Test Robotics": "현재 기업 차별성",
                 competitor: "경쟁사 비교 결과",
@@ -233,6 +237,35 @@ class InvestmentJudgeNodeTests(unittest.TestCase):
         self.assertEqual(b04["evidence"][0]["chunk_id"], "COMP_C01")
         self.assertIn("Competition Evidence", fake.calls[0][1][1])
         self.assertIn("Competitor Robotics", fake.calls[0][1][1])
+        self.assertIn("<allowed_criteria>B04</allowed_criteria>", fake.calls[0][1][1])
+
+    def test_q4_scoped_competitor_evidence_is_rejected_for_q9(self):
+        state = add_competitor_evidence(make_state(make_evidence("E3")), ["B04"])
+        initial = [
+            make_assessment(criterion.id, score=None, status="INSUFFICIENT_EVIDENCE", confidence="Low")
+            for criterion in CRITERIA
+        ]
+        initial[8] = make_assessment("B09", score=3, chunk_id="COMP_C01", source_id="COMP")
+        repaired = make_assessment(
+            "B09", score=None, status="INSUFFICIENT_EVIDENCE", confidence="Low"
+        )
+        fake = FakeStructuredJudge(
+            [
+                {"criteria": initial, "key_strengths": [], "key_risks": []},
+                {"criteria": [repaired], "key_strengths": [], "key_risks": []},
+            ]
+        )
+
+        with patch.object(judge, "get_structured_llm", return_value=fake):
+            update = judge.investment_judge_node(state)
+
+        b09 = next(
+            item
+            for item in update["investment_results"]["Test Robotics"]["criteria"]
+            if item["criterion_id"] == "B09"
+        )
+        self.assertEqual(len(fake.calls), 2)
+        self.assertIsNone(b09["score"])
 
     def test_competitor_evidence_is_rejected_outside_q4_q9(self):
         own_evidence = make_evidence("E3")
@@ -297,6 +330,40 @@ class CriteriaValidationTests(unittest.TestCase):
         self.assertIn("중복", by_id["B01"]["missing_information"][0])
         self.assertEqual(by_id["B02"]["score"], 3)
         self.assertEqual(by_id["B02"]["confidence"], "Low")
+
+    def test_confidence_is_capped_by_evidence_level_and_source_diversity(self):
+        one_external = make_evidence("E3")
+        available = {one_external["chunk_id"]: one_external}
+        raw = [make_assessment(criterion.id, confidence="High") for criterion in CRITERIA]
+
+        validated = validate_criteria(raw, available)
+
+        self.assertTrue(all(item["confidence"] == "Medium" for item in validated))
+        self.assertTrue(all("confidence 상한을 Medium" in item["reasoning"] for item in validated))
+
+    def test_high_confidence_requires_two_external_sources(self):
+        first = make_evidence("E3", "FIRST_C01", "FIRST")
+        second = make_evidence("E4", "SECOND_C01", "SECOND")
+        available = {item["chunk_id"]: item for item in (first, second)}
+        raw = [make_assessment(criterion.id, confidence="High") for criterion in CRITERIA]
+        for item in raw:
+            item["evidence"] = [
+                {"chunk_id": "FIRST_C01", "source_id": "FIRST"},
+                {"chunk_id": "SECOND_C01", "source_id": "SECOND"},
+            ]
+
+        validated = validate_criteria(raw, available)
+
+        self.assertTrue(all(item["confidence"] == "High" for item in validated))
+
+    def test_single_company_source_caps_confidence_at_low(self):
+        one_company_source = make_evidence("E1")
+        available = {one_company_source["chunk_id"]: one_company_source}
+        raw = [make_assessment(criterion.id, confidence="Medium") for criterion in CRITERIA]
+
+        validated = validate_criteria(raw, available)
+
+        self.assertTrue(all(item["confidence"] == "Low" for item in validated))
 
     def test_fabricated_evidence_is_removed_and_score_becomes_na(self):
         evidence = make_evidence("E3")

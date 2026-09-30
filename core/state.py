@@ -15,6 +15,7 @@ from typing import Annotated, Literal, TypedDict
 # ---------------------------------------------------------------------------
 EvidenceLevel = Literal["E0", "E1", "E2", "E3", "E4", "E5"]
 Confidence = Literal["High", "Medium", "Low"]
+CompetitionCriterion = Literal["B04", "B09"]
 CriterionStatus = Literal["SCORED", "INSUFFICIENT_EVIDENCE"]
 Decision = Literal["INVEST", "HOLD", "HOLD_INSUFFICIENT_EVIDENCE"]
 
@@ -62,6 +63,7 @@ class AnalysisResult(TypedDict):
 
 class Comparison(TypedDict):
     dimension: str  # 기술, 제품, AI/Data, 기술 성숙도, 상용화, 제조·배치 확장성, 시장전략, 차별성, Risk
+    criterion_ids: list[CompetitionCriterion]  # 이 비교 Evidence를 사용할 수 있는 Judge 문항
     company_findings: dict[str, str]  # 기업명 → 비교축별 Finding
     evidence_refs: list[EvidenceRef]
 

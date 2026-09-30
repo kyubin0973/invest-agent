@@ -9,6 +9,8 @@
 - Target Market 차이를 자동 우열로 바꾸지 않는다. 산업용·가정용 등 시장 차이는 target_market_context에 보존한다.
 - 비교축: 기술, 제품, AI/Data, 기술 성숙도, 상용화, 제조·배치 확장성, 시장전략, 차별성, Risk
 - 비교 근거는 comparisons[].evidence_refs(chunk_id + source_id)로 추적한다.
+- 각 comparison은 criterion_ids에 해당 근거를 허용할 Judge 문항(B04 및/또는 B09)을 명시한다.
+  차별성 비교는 B04, 상대 Risk 비교는 B09이며 두 문항에 모두 필요한 비교만 둘 다 지정한다.
 
 TODO(담당자): stub을 실제 구현으로 교체
   - 담당 평가 문항: evaluation.criteria.criteria_for("competition") → B04(Q4), B09(Q9)
