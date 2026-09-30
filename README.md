@@ -14,18 +14,19 @@
 - 근거 안전 규칙: 기업 주장 ≠ 달성 성과, Demo ≠ 상용 배치, 근거 없음 ≠ 부정 근거
 - Evidence Level(E0~E5)과 1·3·5점 척도로 12개 문항 평가, 근거가 없는 문항은 N/A
 - LLM이 아닌 Python 규칙으로 최종 점수·판정 계산 (INVEST / HOLD / HOLD_INSUFFICIENT_EVIDENCE)
-- 모든 후보를 끝까지 평가한 뒤, 추천 기업이 없어도 이유를 담은 투자 보고서와 REFERENCE 생성
-- LangSmith 트레이싱으로 전체 실행 기록
+- 모든 후보를 끝까지 평가한 뒤, 추천 기업이 없어도 이유를 담은 5쪽 PDF 투자 보고서와 REFERENCE 생성
+- LangSmith 트레이싱으로 전체 실행 기록 (선택)
 
 
 ## Tech Stack
 | Category | Details |
 |---|---|
 | Framework | LangGraph, LangChain, Python 3.11 |
-| LLM/Generator | gpt-4o-mini (OpenAI API, temperature 0) |
+| LLM/Generator | gpt-4o-mini (OpenAI API, temperature 0, seed 42) |
 | LLM/Judge | gpt-4o-mini (구조화 출력 + Python 검증) |
 | Retrieval | Chroma - Hit Rate@5 0.906, MRR@5 0.667 (문서 기반 질문 64개, Agent별 검색 범위 적용, 한국어 질의 자동 번역) |
 | Embedding | intfloat/multilingual-e5-base (gte-multilingual-base와 비교 후 선정) |
+| Report | reportlab (5쪽 고정 PDF) |
 | Tracing | LangSmith |
 
 
@@ -34,7 +35,7 @@
 - Market & Traction Agent: 공통 시장 보고서와 기업 자료를 나눠 검색해 시장 규모, 고객 배치·계약, 사업모델, 팀, 제조·Fleet 운영을 분석
 - Competition Agent: 모든 후보의 분석 결과를 비교해 Target Market 맥락, 차별성, 상대 Risk를 정리 (신규 검색 없음)
 - Investment Judge Agent: 분석 근거로 12개 문항을 채점하고, Python 규칙으로 최종 점수와 투자 판정을 확정
-- Report Generator Agent: 확정된 결과만으로 SUMMARY, 기업별 분석, 점수표, REFERENCE를 담은 투자 보고서 생성
+- Report Generator Agent: 확정된 결과만으로 SUMMARY, 기술·시장 분석, 경쟁 비교·점수표, REFERENCE를 담은 5쪽 PDF 투자 보고서 생성
 
 ### 평가 기준 (Q1~Q12)
 | 구분 | 문항 |
@@ -103,18 +104,26 @@ graph TD;
 ├── documents/             # PDF 로딩·정리, 메타데이터, 문서 구성 점검
 ├── core/                  # LangGraph 그래프, State, LLM, 트레이싱 설정
 ├── tests/                 # 단위 테스트
-├── outputs/               # 평가 결과 저장
+├── outputs/               # 실행 결과 (Markdown 보고서)
+├── reports/               # 실행 결과 (PDF 투자 보고서)
 ├── app.py                 # 실행 스크립트
 └── README.md
 ```
 
 
 ## Usage
+[uv](https://docs.astral.sh/uv/)를 설치한 뒤, 프로젝트 폴더에 `.env` 파일을 만들고 아래 값을 입력합니다.
+```
+OPENAI_API_KEY=발급받은_키
+LANGCHAIN_TRACING_V2=false          # LangSmith를 쓰려면 true + LANGCHAIN_API_KEY 입력
+LANGCHAIN_API_KEY=
+HF_TOKEN=                           # 선택: 임베딩 모델 다운로드 속도 제한 완화
+```
+
 ```bash
 uv sync                              # 패키지 설치
-cp .env.example .env                 # .env에 OPENAI_API_KEY 입력
 uv run python -m rag.build_index     # 벡터DB 생성 (최초 1회 또는 문서 변경 시)
-uv run python app.py                 # 전체 실행 → outputs/report_*.md
+uv run python app.py                 # 전체 실행 → reports/investment_report.pdf
 ```
 
 - 일부 기업만 평가: `uv run python app.py --companies "Apptronik"`
@@ -123,7 +132,7 @@ uv run python app.py                 # 전체 실행 → outputs/report_*.md
 
 
 ## Contributors
-- 김규빈 : Market & Traction Agent, RAG 파이프라인(인덱싱·검색·임베딩 선정·성능 평가), LangGraph 그래프·State 설계
+- 김규빈 : Market & Traction Agent, RAG 파이프라인, LangGraph 그래프·State 설계
 - 박진근 : Technology & Product Agent
 - 윤서진 : Competition Agent, Report Generator
 - 정지우 : Investment Judge Agent, 평가 기준 검증

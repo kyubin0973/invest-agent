@@ -1,5 +1,6 @@
-# 비밀 정보
+# 비밀 정보 (.env와 .env.* 모두 제외, 필요한 변수는 README Usage 참고)
 .env
+.env.*
 
 # Python / 가상환경
 .venv/
