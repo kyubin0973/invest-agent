@@ -13,7 +13,7 @@
 import json
 from langchain_core.messages import SystemMessage, HumanMessage
 from core.llm import get_llm
-from core.state import CompetitionResult, InvestmentState, ComparisonItem
+from core.state import CompetitionResult, InvestmentState, Comparison
 from prompts.competition import COMPETITION_SYSTEM_PROMPT
 
 
@@ -83,7 +83,7 @@ def competition_node(state: InvestmentState) -> dict:
         }
 
     # 5. comparisons 항목 정제
-    formatted_comparisons: list[ComparisonItem] = []
+    formatted_comparisons: list[Comparison] = []
     for item in parsed.get("comparisons", []):
         formatted_comparisons.append({
             "dimension": item.get("dimension", ""),
