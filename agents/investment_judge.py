@@ -21,6 +21,8 @@ from evaluation.criteria import (
 )
 from prompts.investment_judge import build_judge_messages
 
+COMPETITION_EVIDENCE_CRITERIA = {"B04", "B09"}
+
 
 class EvidenceRefOutput(BaseModel):
     chunk_id: str
@@ -59,6 +61,66 @@ def _available_evidence(state: InvestmentState, company: str) -> dict[str, dict]
     return evidence
 
 
+def _all_analysis_evidence(state: InvestmentState) -> tuple[dict[str, dict], dict[str, str]]:
+    """모든 후보의 분석 Evidence와 각 Evidence의 소유 기업을 수집한다."""
+    evidence: dict[str, dict] = {}
+    owners: dict[str, str] = {}
+    for company in state["candidate_companies"]:
+        for results in (state["technology_results"], state["market_traction_results"]):
+            for item in results.get(company, {}).get("evidence", []):
+                chunk_id = item["chunk_id"]
+                existing = evidence.get(chunk_id)
+                if existing and existing["source_id"] != item["source_id"]:
+                    raise ValueError(f"chunk_id 충돌: {chunk_id}")
+                existing_owner = owners.get(chunk_id)
+                if existing_owner and existing_owner != company:
+                    raise ValueError(f"Evidence 소유 기업 충돌: {chunk_id} ({existing_owner}, {company})")
+                evidence[chunk_id] = item
+                owners[chunk_id] = company
+    return evidence, owners
+
+
+def _competition_evidence(
+    state: InvestmentState,
+) -> tuple[dict[str, dict], dict[str, str], list[str]]:
+    """Competition이 실제 참조한 Evidence만 전체 후보 분석 결과에서 역참조한다."""
+    catalog, owners = _all_analysis_evidence(state)
+    resolved: dict[str, dict] = {}
+    resolved_owners: dict[str, str] = {}
+    unresolved: list[str] = []
+
+    competition = state.get("competition_result") or {}
+    for comparison in competition.get("comparisons", []):
+        for ref in comparison.get("evidence_refs", []):
+            if not isinstance(ref, dict):
+                unresolved.append(repr(ref))
+                continue
+            chunk_id = ref.get("chunk_id")
+            source_id = ref.get("source_id")
+            item = catalog.get(chunk_id)
+            if not item or item.get("source_id") != source_id:
+                unresolved.append(f"{chunk_id} | {source_id}")
+                continue
+            resolved[chunk_id] = item
+            resolved_owners[chunk_id] = owners[chunk_id]
+
+    return resolved, resolved_owners, list(dict.fromkeys(unresolved))
+
+
+def _allowed_evidence_by_criterion(
+    own_evidence: dict[str, dict],
+    competition_evidence: dict[str, dict],
+) -> dict[str, set[tuple[str, str]]]:
+    own_refs = {(item["chunk_id"], item["source_id"]) for item in own_evidence.values()}
+    competition_refs = {
+        (item["chunk_id"], item["source_id"]) for item in competition_evidence.values()
+    }
+    allowed = {criterion_id: set(own_refs) for criterion_id in CRITERIA_BY_ID}
+    for criterion_id in COMPETITION_EVIDENCE_CRITERIA:
+        allowed[criterion_id].update(competition_refs)
+    return allowed
+
+
 def _as_dict(value: Any) -> dict:
     if isinstance(value, BaseModel):
         return value.model_dump()
@@ -77,6 +139,7 @@ def _criterion_issues(
     assessments: list[dict],
     available_evidence: dict[str, dict],
     expected_ids: set[str],
+    allowed_evidence_by_criterion: dict[str, set[tuple[str, str]]] | None = None,
 ) -> dict[str, list[str]]:
     """보정 호출이 필요한 문항과 검증 실패 사유를 찾는다."""
     counts = Counter(item.get("criterion_id") for item in assessments)
@@ -103,7 +166,17 @@ def _criterion_issues(
                     invalid_refs.append(ref)
                     continue
                 item = available_evidence.get(ref.get("chunk_id"))
-                if item and item.get("source_id") == ref.get("source_id"):
+                evidence_key = (ref.get("chunk_id"), ref.get("source_id"))
+                allowed_refs = (
+                    allowed_evidence_by_criterion.get(criterion_id, set())
+                    if allowed_evidence_by_criterion is not None
+                    else None
+                )
+                if (
+                    item
+                    and item.get("source_id") == ref.get("source_id")
+                    and (allowed_refs is None or evidence_key in allowed_refs)
+                ):
                     valid_items.append(item)
                 else:
                     invalid_refs.append(ref)
@@ -153,19 +226,38 @@ def _invoke_judge(messages: list[tuple[str, str]]) -> dict:
 def _llm_score_criteria(
     state: InvestmentState,
     company: str,
-    evidence: dict[str, dict],
+    own_evidence: dict[str, dict],
+    competition_evidence: dict[str, dict],
+    competition_owners: dict[str, str],
+    allowed_evidence_by_criterion: dict[str, set[tuple[str, str]]],
 ) -> dict:
     """12문항 일괄 평가 후 문제가 있는 문항만 최대 한 번 보정한다."""
     expected_ids = set(CRITERIA_BY_ID)
-    evidence_items = list(evidence.values())
+    available_evidence = {**competition_evidence, **own_evidence}
+    own_evidence_items = list(own_evidence.values())
+    competition_evidence_items = [
+        (competition_owners[item["chunk_id"]], item) for item in competition_evidence.values()
+    ]
 
     # 현재는 비용·지연을 줄이기 위해 12문항을 한 번에 평가한다. 실제 평가에서 긴 Context로
     # 문항 누락·상호간섭이 반복되면 이 호출 경계를 문항별 12회 호출로 바꿀 수 있다.
     log_stage(company, "LLM", "12개 평가 문항 일괄 호출")
-    initial = _invoke_judge(build_judge_messages(state, company, evidence_items))
+    initial = _invoke_judge(
+        build_judge_messages(
+            state,
+            company,
+            own_evidence_items,
+            competition_evidence=competition_evidence_items,
+        )
+    )
     initial_criteria = _as_dict_list(initial.get("criteria"))
     log_criteria(company, "LLM 최초 평가", initial_criteria)
-    issues = _criterion_issues(initial_criteria, evidence, expected_ids)
+    issues = _criterion_issues(
+        initial_criteria,
+        available_evidence,
+        expected_ids,
+        allowed_evidence_by_criterion,
+    )
     if not issues:
         return {
             "criteria": initial_criteria,
@@ -181,7 +273,8 @@ def _llm_score_criteria(
         build_judge_messages(
             state,
             company,
-            evidence_items,
+            own_evidence_items,
+            competition_evidence=competition_evidence_items,
             criterion_ids=issue_ids,
             repair_issues=issues,
             previous_assessments=previous,
@@ -252,16 +345,36 @@ def investment_judge_node(state: InvestmentState) -> dict:
     if not company:
         raise ValueError("Investment Judge 실행 전에 current_company가 설정되어야 합니다.")
 
-    evidence = _available_evidence(state, company)
+    own_evidence = _available_evidence(state, company)
+    competition_evidence, competition_owners, unresolved_competition_refs = _competition_evidence(state)
+    available_evidence = {**competition_evidence, **own_evidence}
+    allowed_evidence = _allowed_evidence_by_criterion(own_evidence, competition_evidence)
     technology_count = len(state["technology_results"].get(company, {}).get("evidence", []))
     market_count = len(state["market_traction_results"].get(company, {}).get("evidence", []))
     log_stage(
         company,
         "START",
-        f"technology_evidence={technology_count} | market_evidence={market_count} | unique={len(evidence)}",
+        (
+            f"technology_evidence={technology_count} | market_evidence={market_count} | "
+            f"competition_evidence={len(competition_evidence)} | "
+            f"unresolved_competition_refs={len(unresolved_competition_refs)}"
+        ),
     )
-    llm_result = _llm_score_criteria(state, company, evidence)
-    criteria = validate_criteria(llm_result["criteria"], evidence)
+    if unresolved_competition_refs:
+        log_stage(
+            company,
+            "COMPETITION_EVIDENCE_WARNING",
+            "해결하지 못한 참조: " + ", ".join(unresolved_competition_refs),
+        )
+    llm_result = _llm_score_criteria(
+        state,
+        company,
+        own_evidence,
+        competition_evidence,
+        competition_owners,
+        allowed_evidence,
+    )
+    criteria = validate_criteria(llm_result["criteria"], available_evidence, allowed_evidence)
     log_criteria(company, "Python 검증 후 최종 평가", criteria)
     verdict = decide({criterion["criterion_id"]: criterion["score"] for criterion in criteria})
 

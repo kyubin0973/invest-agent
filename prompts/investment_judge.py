@@ -56,6 +56,7 @@ def build_judge_messages(
     company: str,
     evidence: list[dict],
     *,
+    competition_evidence: list[tuple[str, dict]] | None = None,
     criterion_ids: set[str] | None = None,
     repair_issues: dict[str, list[str]] | None = None,
     previous_assessments: list[dict] | None = None,
@@ -63,7 +64,19 @@ def build_judge_messages(
     """초기 일괄 평가 또는 문제 문항의 1회 보정 메시지를 만든다."""
     requested_ids = criterion_ids or {criterion.id for criterion in CRITERIA}
     context = json.dumps(_analysis_context(state, company), ensure_ascii=False, indent=2, default=str)
-    evidence_text = format_evidence_items(evidence) or "제공된 Evidence 없음"
+    own_evidence_text = format_evidence_items(evidence) or "제공된 현재 기업 Evidence 없음"
+    competition_blocks = []
+    for owner, item in competition_evidence or []:
+        competition_blocks.append(
+            f"<competition_evidence_owner>{owner}</competition_evidence_owner>\n"
+            f"{format_evidence_items([item])}"
+        )
+    competition_evidence_text = "\n".join(competition_blocks) or "제공된 Competition Evidence 없음"
+    evidence_text = (
+        f"[현재 평가 기업 Evidence: {company}]\n{own_evidence_text}\n\n"
+        "[Competition Evidence: B04(Q4)·B09(Q9)에서만 사용 가능]\n"
+        f"{competition_evidence_text}"
+    )
     specs = json.dumps(_criterion_spec(requested_ids), ensure_ascii=False, indent=2)
     rubric = json.dumps(
         {
@@ -108,6 +121,8 @@ def build_judge_messages(
 - Q9는 점수가 높을수록 Risk가 관리 가능하다는 뜻이다.
 - confidence는 High, Medium, Low 중 하나만 사용한다.
 - Evidence의 원문 Metadata를 새로 만들지 말고 chunk_id와 source_id만 참조한다.
+- Competition Evidence는 B04(Q4)와 B09(Q9)에만 인용한다. 다른 10개 문항에는 현재 평가 기업 Evidence만 사용한다.
+- Competition Evidence의 owner를 확인하고 타사 Evidence를 현재 기업의 직접 성과·고객·시장 근거로 바꾸지 않는다.
 - reasoning에는 해당 문항의 판단과 한계를 함께 적고, 다른 문항과 같은 의미로 중복 가점·감점하지 않는다.
 - key_strengths와 key_risks는 criterion_ids와 evidence 참조를 포함해야 한다. 확인되지 않은 요약은 만들지 않는다.
 - FinalScore, EvidenceCoverage, Decision은 계산하지 않는다. Python이 계산한다."""

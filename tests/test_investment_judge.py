@@ -86,6 +86,45 @@ def make_state(evidence: dict | None = None) -> dict:
     }
 
 
+def add_competitor_evidence(state: dict) -> dict:
+    competitor = "Competitor Robotics"
+    competitor_evidence = make_evidence("E3", "COMP_C01", "COMP")
+    state["candidate_companies"].append(competitor)
+    state["company_profiles"][competitor] = {
+        "name": competitor,
+        "target_market": "산업용",
+        "funding_stage": None,
+        "eligibility": {"is_private": True, "exit_completed": False, "evaluation_date": "2026-01-01"},
+        "document_scope": {"source_ids": ["COMP"], "document_types": ["deployment"]},
+        "source_refs": {},
+    }
+    state["technology_results"][competitor] = {
+        "summary": "경쟁사 기술 분석",
+        "findings": [],
+        "evidence": [competitor_evidence],
+        "risks": [],
+        "missing_information": [],
+    }
+    state["market_traction_results"][competitor] = {
+        "summary": "경쟁사 시장 분석",
+        "findings": [],
+        "evidence": [],
+        "risks": [],
+        "missing_information": [],
+    }
+    state["competition_result"]["comparisons"] = [
+        {
+            "dimension": "차별성",
+            "company_findings": {
+                "Test Robotics": "현재 기업 차별성",
+                competitor: "경쟁사 비교 결과",
+            },
+            "evidence_refs": [{"chunk_id": "COMP_C01", "source_id": "COMP"}],
+        }
+    ]
+    return state
+
+
 class FakeStructuredJudge:
     def __init__(self, responses: list[dict]):
         self.responses = list(responses)
@@ -166,6 +205,69 @@ class InvestmentJudgeNodeTests(unittest.TestCase):
         self.assertEqual(len(fake.calls), 1)
         self.assertEqual(result["decision"], "HOLD_INSUFFICIENT_EVIDENCE")
         self.assertEqual(result["evidence_coverage"], 0.0)
+
+    def test_competitor_evidence_is_allowed_for_differentiation(self):
+        own_evidence = make_evidence("E3")
+        state = add_competitor_evidence(make_state(own_evidence))
+        criteria = [
+            make_assessment(criterion.id, score=None, status="INSUFFICIENT_EVIDENCE", confidence="Low")
+            for criterion in CRITERIA
+        ]
+        criteria[3] = make_assessment(
+            "B04",
+            score=3,
+            chunk_id="COMP_C01",
+            source_id="COMP",
+        )
+        fake = FakeStructuredJudge(
+            [{"criteria": criteria, "key_strengths": [], "key_risks": []}]
+        )
+
+        with patch.object(judge, "get_structured_llm", return_value=fake):
+            update = judge.investment_judge_node(state)
+
+        result = update["investment_results"]["Test Robotics"]
+        b04 = next(item for item in result["criteria"] if item["criterion_id"] == "B04")
+        self.assertEqual(len(fake.calls), 1)
+        self.assertEqual(b04["score"], 3)
+        self.assertEqual(b04["evidence"][0]["chunk_id"], "COMP_C01")
+        self.assertIn("Competition Evidence", fake.calls[0][1][1])
+        self.assertIn("Competitor Robotics", fake.calls[0][1][1])
+
+    def test_competitor_evidence_is_rejected_outside_q4_q9(self):
+        own_evidence = make_evidence("E3")
+        state = add_competitor_evidence(make_state(own_evidence))
+        initial = [
+            make_assessment(criterion.id, score=None, status="INSUFFICIENT_EVIDENCE", confidence="Low")
+            for criterion in CRITERIA
+        ]
+        initial[0] = make_assessment(
+            "B01",
+            score=3,
+            chunk_id="COMP_C01",
+            source_id="COMP",
+        )
+        repaired_b01 = make_assessment(
+            "B01",
+            score=None,
+            status="INSUFFICIENT_EVIDENCE",
+            confidence="Low",
+        )
+        fake = FakeStructuredJudge(
+            [
+                {"criteria": initial, "key_strengths": [], "key_risks": []},
+                {"criteria": [repaired_b01], "key_strengths": [], "key_risks": []},
+            ]
+        )
+
+        with patch.object(judge, "get_structured_llm", return_value=fake):
+            update = judge.investment_judge_node(state)
+
+        result = update["investment_results"]["Test Robotics"]
+        b01 = next(item for item in result["criteria"] if item["criterion_id"] == "B01")
+        self.assertEqual(len(fake.calls), 2)
+        self.assertIsNone(b01["score"])
+        self.assertEqual(b01["evidence"], [])
 
 
 class CriteriaValidationTests(unittest.TestCase):
