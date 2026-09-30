@@ -4,12 +4,21 @@
 입력: 확정된 State
 출력: references, final_report
 
-보고서 구성 (설계 5.1)
+보고서 구성 (설계 5.1) - 최대 5쪽, 맨 앞 SUMMARY(핵심 결론, 1/2페이지 이하), 맨 끝 REFERENCE
   1. SUMMARY + Company Snapshot   ← company_profiles, investment_results, competition_result
   2. Technology & Product         ← technology_results
   3. Market & Traction            ← market_traction_results
-  4. Competition / Risk / Evaluation (12문항 Scorecard) ← competition_result, investment_results
+  4. Competition / Risk / Evaluation ← competition_result, investment_results
+     (Target Market Context, 12문항 Scorecard, 차별성·Risk·Decision Reason)
   5. REFERENCE                    ← references
+
+SUMMARY 전달 규칙 (설계 5.2) - 항목별 유일한 Source State
+  Investment Thesis / Decision Reason ← investment_results[기업].key_strengths + decision_reason
+  Key Risks                           ← investment_results[기업].key_risks
+  Missing Information / Due Diligence ← investment_results[기업].missing_information
+  Company Snapshot                    ← company_profiles[기업] (사전 입력·검증 값)
+
+Template + 선택적 Narrative (설계 2.1): Narrative를 쓸 때도 확정된 State의 사실·점수·Risk·Decision만 전달한다.
 
 출력 제약 (설계 5.4)
   - 실제 State만 사용: 새 사실·Score·Risk·Decision·추가 실사 항목을 생성하지 않는다.

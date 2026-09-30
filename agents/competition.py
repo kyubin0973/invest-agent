@@ -2,6 +2,7 @@
 
 역할: Target Market 맥락을 보존한 차별성·전략·상대 Risk 비교 (전체 후보 분석 후 1회 실행)
 입력: technology_results, market_traction_results (전체 후보의 구조화 결과), company_profiles
+도구: State Reader, Comparator (설계 2.1)
 출력: competition_result
 
 - 신규 검색을 하지 않고, 앞선 Agent의 구조화 결과와 EvidenceItem만 참조한다 (새 Evidence 생성 금지).
