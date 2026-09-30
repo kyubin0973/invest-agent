@@ -86,6 +86,20 @@ class CriterionResult(TypedDict):
     missing_information: list[str]
 
 
+class JudgeRunMetadata(TypedDict):
+    schema_version: str
+    prompt_version: str
+    model_provider: str
+    model: str
+    temperature: int | float
+    seed: int
+    input_fingerprint: str  # 최초 호출 전체 메시지의 SHA-256
+    prompt_fingerprints: list[str]  # 최초 호출과 선택적 보정 호출 순서
+    response_fingerprints: list[str]  # LLM 구조화 응답의 canonical SHA-256
+    llm_call_count: int
+    repaired_criterion_ids: list[str]
+
+
 class InvestmentResult(TypedDict):
     criteria: list[CriterionResult]  # N/A 문항을 포함해 항상 12개
     final_score: float | None
@@ -95,6 +109,7 @@ class InvestmentResult(TypedDict):
     key_strengths: list[str]
     key_risks: list[str]
     missing_information: list[str]
+    judge_run: JudgeRunMetadata
 
 
 class Eligibility(TypedDict):

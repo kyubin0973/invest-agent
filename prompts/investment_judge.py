@@ -24,6 +24,18 @@ from prompts.common import (
     format_evidence_items,
 )
 
+JUDGE_PROMPT_VERSION = "investment-judge-v2"
+
+
+def _analysis_view(result: object) -> dict:
+    """EvidenceItem 원문은 별도 Evidence 블록에만 두고 분석 결론만 Context에 남긴다."""
+    if not isinstance(result, dict):
+        return {}
+    return {
+        key: result.get(key)
+        for key in ("summary", "findings", "risks", "missing_information")
+    }
+
 
 def _criterion_spec(criterion_ids: set[str]) -> list[dict]:
     return [
@@ -45,10 +57,25 @@ def _analysis_context(state: dict, company: str) -> dict:
     return {
         "company": company,
         "company_profile": state.get("company_profiles", {}).get(company, {}),
-        "technology_analysis": state.get("technology_results", {}).get(company, {}),
-        "market_traction_analysis": state.get("market_traction_results", {}).get(company, {}),
+        "technology_analysis": _analysis_view(
+            state.get("technology_results", {}).get(company, {})
+        ),
+        "market_traction_analysis": _analysis_view(
+            state.get("market_traction_results", {}).get(company, {})
+        ),
         "competition": competition,
     }
+
+
+def _json(value: object) -> str:
+    """프롬프트 fingerprint가 실행마다 흔들리지 않도록 canonical JSON을 만든다."""
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
 
 
 def build_judge_messages(
@@ -63,10 +90,15 @@ def build_judge_messages(
 ) -> list[tuple[str, str]]:
     """초기 일괄 평가 또는 문제 문항의 1회 보정 메시지를 만든다."""
     requested_ids = criterion_ids or {criterion.id for criterion in CRITERIA}
-    context = json.dumps(_analysis_context(state, company), ensure_ascii=False, indent=2, default=str)
-    own_evidence_text = format_evidence_items(evidence) or "제공된 현재 기업 Evidence 없음"
+    context = _json(_analysis_context(state, company))
+    sorted_evidence = sorted(evidence, key=lambda item: (item["source_id"], item["chunk_id"]))
+    own_evidence_text = format_evidence_items(sorted_evidence) or "제공된 현재 기업 Evidence 없음"
     competition_blocks = []
-    for owner, item, allowed_criteria in competition_evidence or []:
+    sorted_competition_evidence = sorted(
+        competition_evidence or [],
+        key=lambda value: (value[1]["source_id"], value[1]["chunk_id"]),
+    )
+    for owner, item, allowed_criteria in sorted_competition_evidence:
         competition_blocks.append(
             f"<competition_evidence_owner>{owner}</competition_evidence_owner>\n"
             f"<allowed_criteria>{','.join(allowed_criteria)}</allowed_criteria>\n"
@@ -78,8 +110,8 @@ def build_judge_messages(
         "[Competition Evidence: B04(Q4)·B09(Q9)에서만 사용 가능]\n"
         f"{competition_evidence_text}"
     )
-    specs = json.dumps(_criterion_spec(requested_ids), ensure_ascii=False, indent=2)
-    rubric = json.dumps(
+    specs = _json(_criterion_spec(requested_ids))
+    rubric = _json(
         {
             "evidence_levels": EVIDENCE_LEVELS,
             "evidence_level_rule": EVIDENCE_LEVEL_RULE,
@@ -88,16 +120,14 @@ def build_judge_messages(
             "confidence_levels": CONFIDENCE_LEVELS,
             "criterion_boundaries": list(CRITERION_BOUNDARIES),
         },
-        ensure_ascii=False,
-        indent=2,
     )
 
     if repair_issues:
         mode = (
             "아래 문항은 첫 평가에서 형식 또는 근거 검증에 실패했다. "
             "실패한 문항만 다시 평가하고 다른 문항은 출력하지 않는다.\n"
-            f"검증 실패 사유:\n{json.dumps(repair_issues, ensure_ascii=False, indent=2)}\n"
-            f"이전 출력:\n{json.dumps(previous_assessments or [], ensure_ascii=False, indent=2, default=str)}"
+            f"검증 실패 사유:\n{_json(repair_issues)}\n"
+            f"이전 출력:\n{_json(previous_assessments or [])}"
         )
     else:
         mode = "요청된 12개 문항을 모두 한 번씩 평가한다. 누락하거나 중복하지 않는다."

@@ -5,7 +5,8 @@ from dataclasses import dataclass
 from core.state import InvestmentState
 from evaluation.criteria import CRITERIA_BY_ID
 
-COMPETITION_EVIDENCE_CRITERIA = frozenset({"B04", "B09"})
+COMPETITION_EVIDENCE_CRITERIA = ("B04", "B09")
+COMPETITION_EVIDENCE_CRITERIA_SET = frozenset(COMPETITION_EVIDENCE_CRITERIA)
 EVIDENCE_LEVELS = frozenset({"E1", "E2", "E3", "E4", "E5"})
 SOURCE_TYPES = frozenset({"company", "partner", "industry_report"})
 ANALYSIS_KEYS = frozenset(
@@ -47,10 +48,13 @@ class JudgeEvidenceContext:
         for criterion_id, evidence in self.competition_by_criterion.items():
             for chunk_id in evidence:
                 scopes.setdefault(chunk_id, []).append(criterion_id)
-        return [
-            (self.competition_owners[chunk_id], item, sorted(scopes[chunk_id]))
-            for chunk_id, item in self.competition_evidence.items()
-        ]
+        return sorted(
+            [
+                (self.competition_owners[chunk_id], item, sorted(scopes[chunk_id]))
+                for chunk_id, item in self.competition_evidence.items()
+            ],
+            key=lambda value: (value[1]["source_id"], value[1]["chunk_id"]),
+        )
 
 
 def _require_non_empty_string(value: object, location: str) -> str:
@@ -217,7 +221,7 @@ def validate_and_build_evidence_context(
         if not isinstance(criterion_ids, list) or not criterion_ids:
             raise ValueError(f"{location}.criterion_ids: B04/B09 중 하나 이상이 필요합니다.")
         if len(set(criterion_ids)) != len(criterion_ids) or not set(criterion_ids).issubset(
-            COMPETITION_EVIDENCE_CRITERIA
+            COMPETITION_EVIDENCE_CRITERIA_SET
         ):
             raise ValueError(f"{location}.criterion_ids: B04/B09만 중복 없이 허용합니다.")
         company_findings = comparison.get("company_findings")

@@ -4,14 +4,16 @@
 평가한다. 신규 검색, 최종 점수 계산, 투자판정은 LLM에 맡기지 않는다.
 """
 
+import hashlib
+import json
 from collections import Counter
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 from core.judge_logging import log_criteria, log_decision, log_repair_issues, log_stage
-from core.llm import get_structured_llm
-from core.state import InvestmentResult, InvestmentState
+from core.llm import get_llm_settings, get_structured_llm
+from core.state import InvestmentResult, InvestmentState, JudgeRunMetadata
 from evaluation.criteria import (
     ALLOWED_SCORES,
     CONFIDENCE_LEVELS,
@@ -20,7 +22,9 @@ from evaluation.criteria import (
     validate_criteria,
 )
 from evaluation.judge_input import JudgeEvidenceContext, validate_and_build_evidence_context
-from prompts.investment_judge import build_judge_messages
+from prompts.investment_judge import JUDGE_PROMPT_VERSION, build_judge_messages
+
+JUDGE_RUN_SCHEMA_VERSION = "1"
 
 
 class EvidenceRefOutput(BaseModel):
@@ -148,9 +152,59 @@ def _merge_repair(
     return kept + replacements
 
 
-def _invoke_judge(messages: list[tuple[str, str]]) -> dict:
-    response = get_structured_llm(JudgeBatchOutput).invoke(messages)
+def _canonical_fingerprint(value: object) -> str:
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _invoke_judge(
+    messages: list[tuple[str, str]],
+    *,
+    company: str,
+    phase: str,
+    prompt_fingerprint: str,
+) -> dict:
+    response = get_structured_llm(JudgeBatchOutput).invoke(
+        messages,
+        config={
+            "run_name": f"investment_judge_{phase}",
+            "metadata": {
+                "company": company,
+                "phase": phase,
+                "prompt_version": JUDGE_PROMPT_VERSION,
+                "prompt_fingerprint": prompt_fingerprint,
+                **get_llm_settings(),
+            },
+        },
+    )
     return _as_dict(response)
+
+
+def _judge_run_metadata(
+    prompt_fingerprints: list[str],
+    response_fingerprints: list[str],
+    repaired_criterion_ids: list[str],
+) -> JudgeRunMetadata:
+    settings = get_llm_settings()
+    return {
+        "schema_version": JUDGE_RUN_SCHEMA_VERSION,
+        "prompt_version": JUDGE_PROMPT_VERSION,
+        "model_provider": str(settings["model_provider"]),
+        "model": str(settings["model"]),
+        "temperature": settings["temperature"],
+        "seed": int(settings["seed"]),
+        "input_fingerprint": prompt_fingerprints[0],
+        "prompt_fingerprints": prompt_fingerprints,
+        "response_fingerprints": response_fingerprints,
+        "llm_call_count": len(prompt_fingerprints),
+        "repaired_criterion_ids": repaired_criterion_ids,
+    }
 
 
 def _llm_score_criteria(
@@ -168,14 +222,32 @@ def _llm_score_criteria(
     # 현재는 비용·지연을 줄이기 위해 12문항을 한 번에 평가한다. 실제 평가에서 긴 Context로
     # 문항 누락·상호간섭이 반복되면 이 호출 경계를 문항별 12회 호출로 바꿀 수 있다.
     log_stage(company, "LLM", "12개 평가 문항 일괄 호출")
-    initial = _invoke_judge(
-        build_judge_messages(
-            state,
-            company,
-            own_evidence_items,
-            competition_evidence=competition_evidence_items,
-        )
+    initial_messages = build_judge_messages(
+        state,
+        company,
+        own_evidence_items,
+        competition_evidence=competition_evidence_items,
     )
+    initial_fingerprint = _canonical_fingerprint(initial_messages)
+    prompt_fingerprints = [initial_fingerprint]
+    settings = get_llm_settings()
+    log_stage(
+        company,
+        "REPRO",
+        (
+            f"prompt={JUDGE_PROMPT_VERSION} | model={settings['model']} | "
+            f"temperature={settings['temperature']} | seed={settings['seed']} | "
+            f"input_sha256={initial_fingerprint}"
+        ),
+    )
+    initial = _invoke_judge(
+        initial_messages,
+        company=company,
+        phase="initial",
+        prompt_fingerprint=initial_fingerprint,
+    )
+    response_fingerprints = [_canonical_fingerprint(initial)]
+    log_stage(company, "REPRO", f"response_sha256={response_fingerprints[0]}")
     initial_criteria = _as_dict_list(initial.get("criteria"))
     log_criteria(company, "LLM 최초 평가", initial_criteria)
     issues = _criterion_issues(
@@ -189,23 +261,43 @@ def _llm_score_criteria(
             "criteria": initial_criteria,
             "key_strengths": _as_dict_list(initial.get("key_strengths")),
             "key_risks": _as_dict_list(initial.get("key_risks")),
+            "judge_run": _judge_run_metadata(prompt_fingerprints, response_fingerprints, []),
         }
 
     issue_ids = set(issues)
+    ordered_issue_ids = [criterion_id for criterion_id in CRITERIA_BY_ID if criterion_id in issue_ids]
     log_repair_issues(company, issues)
     log_stage(company, "REPAIR", f"문제 문항 {len(issue_ids)}개만 1회 재평가")
-    previous = [item for item in initial_criteria if item.get("criterion_id") in issue_ids]
-    repair = _invoke_judge(
-        build_judge_messages(
-            state,
-            company,
-            own_evidence_items,
-            competition_evidence=competition_evidence_items,
-            criterion_ids=issue_ids,
-            repair_issues=issues,
-            previous_assessments=previous,
-        )
+    previous_by_id = {
+        item.get("criterion_id"): item
+        for item in initial_criteria
+        if item.get("criterion_id") in issue_ids
+    }
+    previous = [
+        previous_by_id[criterion_id]
+        for criterion_id in ordered_issue_ids
+        if criterion_id in previous_by_id
+    ]
+    repair_messages = build_judge_messages(
+        state,
+        company,
+        own_evidence_items,
+        competition_evidence=competition_evidence_items,
+        criterion_ids=issue_ids,
+        repair_issues={criterion_id: issues[criterion_id] for criterion_id in ordered_issue_ids},
+        previous_assessments=previous,
     )
+    repair_fingerprint = _canonical_fingerprint(repair_messages)
+    prompt_fingerprints.append(repair_fingerprint)
+    log_stage(company, "REPRO", f"repair_sha256={repair_fingerprint}")
+    repair = _invoke_judge(
+        repair_messages,
+        company=company,
+        phase="repair",
+        prompt_fingerprint=repair_fingerprint,
+    )
+    response_fingerprints.append(_canonical_fingerprint(repair))
+    log_stage(company, "REPRO", f"repair_response_sha256={response_fingerprints[-1]}")
     repaired_criteria = _as_dict_list(repair.get("criteria"))
     log_criteria(company, "LLM 재평가", repaired_criteria)
     return {
@@ -218,6 +310,11 @@ def _llm_score_criteria(
             *_as_dict_list(initial.get("key_risks")),
             *_as_dict_list(repair.get("key_risks")),
         ],
+        "judge_run": _judge_run_metadata(
+            prompt_fingerprints,
+            response_fingerprints,
+            ordered_issue_ids,
+        ),
     }
 
 
@@ -300,6 +397,7 @@ def investment_judge_node(state: InvestmentState) -> dict:
         "missing_information": _deduplicate(
             [missing for criterion in criteria for missing in criterion["missing_information"]]
         ),
+        "judge_run": llm_result["judge_run"],
     }
     log_decision(company, result)
     completed = state["completed_companies"]

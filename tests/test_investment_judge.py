@@ -133,9 +133,11 @@ class FakeStructuredJudge:
     def __init__(self, responses: list[dict]):
         self.responses = list(responses)
         self.calls: list[list[tuple[str, str]]] = []
+        self.configs: list[dict | None] = []
 
-    def invoke(self, messages):
+    def invoke(self, messages, config=None):
         self.calls.append(messages)
+        self.configs.append(config)
         return self.responses.pop(0)
 
 
@@ -169,6 +171,18 @@ class InvestmentJudgeNodeTests(unittest.TestCase):
         self.assertEqual(result["final_score"], 5.0)
         self.assertEqual(result["key_strengths"], ["외부 확인된 강점"])
         self.assertEqual(update["completed_companies"], ["Test Robotics"])
+        self.assertEqual(result["judge_run"]["prompt_version"], "investment-judge-v2")
+        self.assertEqual(result["judge_run"]["model"], "gpt-4o-mini")
+        self.assertEqual(result["judge_run"]["temperature"], 0)
+        self.assertEqual(result["judge_run"]["seed"], 42)
+        self.assertEqual(result["judge_run"]["llm_call_count"], 1)
+        self.assertEqual(len(result["judge_run"]["input_fingerprint"]), 64)
+        self.assertEqual(len(result["judge_run"]["response_fingerprints"]), 1)
+        self.assertEqual(len(result["judge_run"]["response_fingerprints"][0]), 64)
+        self.assertEqual(
+            fake.configs[0]["metadata"]["prompt_fingerprint"],
+            result["judge_run"]["input_fingerprint"],
+        )
 
     def test_only_invalid_criterion_is_retried_once(self):
         evidence = make_evidence("E3")
@@ -190,6 +204,10 @@ class InvestmentJudgeNodeTests(unittest.TestCase):
         self.assertEqual(len(result["criteria"]), 12)
         self.assertTrue(all(item["score"] == 3 for item in result["criteria"]))
         self.assertIn("실패한 문항만", fake.calls[1][1][1])
+        self.assertEqual(result["judge_run"]["llm_call_count"], 2)
+        self.assertEqual(result["judge_run"]["repaired_criterion_ids"], ["B01"])
+        self.assertEqual(len(result["judge_run"]["prompt_fingerprints"]), 2)
+        self.assertEqual(len(result["judge_run"]["response_fingerprints"]), 2)
 
     def test_no_evidence_is_valid_na_without_retry(self):
         response = {
