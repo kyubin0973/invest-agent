@@ -1,5 +1,5 @@
 {
-  "measured_at": "2026-09-29 22:40",
+  "measured_at": "2026-09-30 11:06",
   "translate_korean_query": true,
   "summary": {
     "scoped": {
@@ -687,7 +687,7 @@
       },
       "lang": "ko",
       "question": "현재 로봇 시스템의 조작 능력 수준이 2라고 했는데, 이는 어떤 특정 작업에서의 성과를 기준으로 한 것인가? 예를 들어, 어떤 종류의 작업이 포함되며, 이 작업들이 수행되는 환경은 어떤 특징을 가지고 있는가?",
-      "search_query": "What specific tasks are used to evaluate the operational capability level of robot systems rated at level 2, and what are the characteristics of the environments in which these tasks are performed?",
+      "search_query": "What specific tasks are considered for the current robot system's operation capability level of 2, and what are the characteristics of the environments in which these tasks are performed?",
       "rank_scoped": 1,
       "top1_scoped": "M7_P44_C02",
       "rank_unfiltered": 1,
@@ -1017,7 +1017,7 @@
       },
       "lang": "ko",
       "question": "휴머노이드 로봇의 생산에 필요한 여섯 축 힘/토크 센서의 공급망에서 어떤 특정한 위험 요소가 존재하며, 이로 인해 생산에 미치는 영향은 무엇인가요?",
-      "search_query": "What specific risk factors exist in the supply chain of six-axis force/torque sensors required for the production of humanoid robots, and what is their impact on production?",
+      "search_query": "What specific risk factors exist in the supply chain of six-axis force/torque sensors necessary for the production of humanoid robots, and what is their impact on production?",
       "rank_scoped": 1,
       "top1_scoped": "M5_P09_C01",
       "rank_unfiltered": 1,

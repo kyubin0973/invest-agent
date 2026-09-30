@@ -10,6 +10,7 @@ from pathlib import Path
 
 from core import tracing
 from core.graph import build_graph, recursion_limit
+from core.judge_logging import configure_judge_logging
 from documents.profiles import load_company_profiles
 
 OUTPUT_DIR = Path(__file__).resolve().parent / "outputs"
@@ -23,6 +24,7 @@ def main() -> None:
     args = parser.parse_args()
 
     tracing.setup()  # 그래프 실행 전에 설정해야 전체 실행이 U_2_4 프로젝트에 한 번에 기록된다
+    configure_judge_logging()
 
     graph = build_graph()
     final_state = graph.invoke(
