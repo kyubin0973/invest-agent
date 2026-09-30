@@ -183,31 +183,54 @@ def validate_criteria(criteria: list[dict], available_evidence: dict[str, dict])
       허용되지 않은 점수(2·4점 등)는 '형식 오류'로 기록해 근거 부족과 구분한다.
       이 처리는 최후의 안전장치이며, Judge는 출력 형식을 1·3·5로 제한하고 형식 오류 문항은 재평가한 뒤 호출한다.
       유효 Evidence가 남지 않거나 규칙에 맞지 않으면 None / INSUFFICIENT_EVIDENCE로 바꾸고 사유를 기록한다.
+    - 중복/confidence/5점 상한: 중복 문항은 N/A, 잘못된 confidence는 Low로 정규화한다.
+      E3 이상 Evidence가 없는 5점은 기업 주장·Demo 중심 Rubric의 상한인 3점으로 조정한다.
 
     criteria 항목의 evidence는 [{"chunk_id", "source_id"}] 참조 또는 EvidenceItem이어도 된다.
     """
-    by_id = {c.get("criterion_id"): c for c in criteria}
+    by_id: dict[str, dict] = {}
+    duplicate_ids: set[str] = set()
+    for item in criteria:
+        criterion_id = item.get("criterion_id")
+        if criterion_id in by_id:
+            duplicate_ids.add(criterion_id)
+        else:
+            by_id[criterion_id] = item
+
     validated = []
     for crit in CRITERIA:
         raw = by_id.get(crit.id)
-        missing = list(raw.get("missing_information", [])) if raw else []
+        raw_missing = raw.get("missing_information") if raw else []
+        missing = list(raw_missing) if isinstance(raw_missing, list) else []
         if raw is None:
             validated.append(_insufficient(crit, "LLM 출력에 문항 결과가 없음"))
             continue
+        if crit.id in duplicate_ids:
+            validated.append(_insufficient(crit, "형식 오류: 동일 criterion_id가 중복됨"))
+            continue
 
         evidence = []
-        for ref in raw.get("evidence", []):
+        seen_evidence: set[tuple[str, str]] = set()
+        raw_evidence = raw.get("evidence")
+        for ref in raw_evidence if isinstance(raw_evidence, list) else []:
+            if not isinstance(ref, dict):
+                continue
             item = available_evidence.get(ref.get("chunk_id"))
-            if item and item["source_id"] == ref.get("source_id"):
+            evidence_key = (ref.get("chunk_id"), ref.get("source_id"))
+            if item and item["source_id"] == ref.get("source_id") and evidence_key not in seen_evidence:
                 evidence.append(item)
+                seen_evidence.add(evidence_key)
 
         score, status = raw.get("score"), raw.get("status")
         valid_score = isinstance(score, int) and not isinstance(score, bool) and score in ALLOWED_SCORES
+        confidence = raw.get("confidence")
         reason = None
         if status == "SCORED" and not valid_score:
             reason = f"형식 오류: 허용되지 않은 점수 {score!r} (허용: 1, 3, 5)"
         elif status == "SCORED" and not evidence:
             reason = "검증된 Evidence가 없음"
+        elif status == "INSUFFICIENT_EVIDENCE" and score is not None:
+            reason = "형식 오류: INSUFFICIENT_EVIDENCE의 score는 null이어야 함"
         elif status not in ("SCORED", "INSUFFICIENT_EVIDENCE"):
             reason = f"형식 오류: 허용되지 않은 status {status!r}"
 
@@ -219,14 +242,29 @@ def validate_criteria(criteria: list[dict], available_evidence: dict[str, dict])
                 "missing_information": missing + ([reason] if reason else []),
             })
         else:
+            # E3 이상은 5점의 필요조건일 뿐 충분조건은 아니다. E1~E2 근거를 5점으로
+            # 과대평가한 경우에만 현행 Rubric의 상한인 3점으로 제한한다.
+            validation_notes = []
+            if score == 5 and not any(e.get("evidence_level") in ("E3", "E4", "E5") for e in evidence):
+                score = 3
+                validation_notes.append("E3 이상 외부검증 Evidence가 없어 5점을 3점으로 조정")
+
+            if confidence not in CONFIDENCE_LEVELS:
+                confidence = "Low"
+                validation_notes.append("허용되지 않은 confidence를 Low로 정규화")
+
+            reasoning = raw.get("reasoning", "")
+            if validation_notes:
+                reasoning = f"[Python 검증: {'; '.join(validation_notes)}] {reasoning}".strip()
+
             validated.append({
                 "criterion_id": crit.id,
                 "criterion_name": crit.name,
                 "score": score,
                 "status": "SCORED",
                 "evidence": evidence,
-                "reasoning": raw.get("reasoning", ""),
-                "confidence": raw.get("confidence", "Low"),
+                "reasoning": reasoning,
+                "confidence": confidence,
                 "missing_information": missing,
             })
     return validated
