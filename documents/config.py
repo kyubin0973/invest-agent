@@ -84,11 +84,11 @@ MAX_COMPANY_CONTEXT_CHARS = 80_000
 # 기업별 필수 문서 체크리스트
 # ---------------------------------------------------------------------------
 # 새 기업을 추가할 때도 같은 종류의 근거를 갖추도록 해서 기업 간 동일 기준 비교를 보장한다.
-# 팀·창업자·투자 정보(B05, B10)는 company_profiles 입력으로 제공한다.
+# 팀·창업자 정보(B05, B10)는 공개 근거가 부족하면 추정하지 않고 N/A로 처리한다 (설계 3.1).
 EVIDENCE_CHECKLIST = {
-    "product_tech": "제품·기술 (B02, B04, B11)",
+    "product_tech": "제품·기술 (B02, B04, H11)",
     "deployment": "고객·배치 사례 (B03, B06)",
-    "manufacturing": "양산·제조 (B12)",
+    "manufacturing": "양산·제조 (H12)",
     "business_model": "가격·수익 모델 (B07)",
     "third_party": "외부 제3자 자료 (Evidence Level E3 이상)",
 }

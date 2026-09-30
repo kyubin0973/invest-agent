@@ -1,14 +1,20 @@
 {
   "Figure AI": {
-    "team": [],
-    "funding": []
+    "target_market": null,
+    "funding_stage": null,
+    "eligibility": {"is_private": null, "exit_completed": null, "evaluation_date": null},
+    "source_refs": {}
   },
   "Apptronik": {
-    "team": [],
-    "funding": []
+    "target_market": null,
+    "funding_stage": null,
+    "eligibility": {"is_private": null, "exit_completed": null, "evaluation_date": null},
+    "source_refs": {}
   },
   "1X Technologies": {
-    "team": [],
-    "funding": []
+    "target_market": null,
+    "funding_stage": null,
+    "eligibility": {"is_private": null, "exit_completed": null, "evaluation_date": null},
+    "source_refs": {}
   }
 }

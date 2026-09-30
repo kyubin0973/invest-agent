@@ -71,7 +71,7 @@ def main() -> None:
             problems += not ids
         print(f"| {label} | " + " | ".join(cells) + " |")
 
-    print("\n팀·창업자·투자 정보(B05, B10)는 company_profiles 입력으로 제공합니다.")
+    print("\n팀·창업자(B05, B10)는 공개 근거가 부족하면 N/A로 처리합니다 (설계 3.1).")
     print(f"\n점검 결과: {'문제 없음' if problems == 0 else f'보완 필요 {problems}건'}")
 
 

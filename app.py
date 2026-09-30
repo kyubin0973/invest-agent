@@ -36,7 +36,7 @@ def main() -> None:
 
     for company in args.companies:
         r = final_state["investment_results"][company]
-        print(f"{company}: {r['decision']} (score {r['final_score']}, coverage {r['evidence_coverage']:.0%})")
+        print(f"{company}: {r['decision']} (score {r['final_score']}, coverage {r['evidence_coverage']:.0%}) - {r['decision_reason']}")
     print(f"Final route: {final_state['final_route']}")
     print(f"보고서: {out.relative_to(OUTPUT_DIR.parent)}")
 

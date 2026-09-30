@@ -44,7 +44,7 @@ invest-agent/
 │   ├── competition.py
 │   ├── investment_judge.py
 │   └── report_generator.py
-├── evaluation/criteria.py  # 평가 항목 12개 + INVEST/HOLD 판정 규칙
+├── evaluation/criteria.py  # 12문항, Rubric, Python 검증, INVEST/HOLD 판정 규칙
 ├── rag/
 │   ├── build_index.py      # 인덱싱 (PDF → 청크 → 임베딩 → Chroma)
 │   ├── retriever.py        # Agent용 검색 함수
@@ -60,7 +60,7 @@ invest-agent/
 │   └── check_corpus.py     # 문서 구성 점검
 └── data/
     ├── manifest.csv        # 문서 목록과 서지정보 (여기 있는 PDF만 사용)
-    ├── company_profiles.json  # 팀·창업자·투자 정보 입력란 (현재 비어 있음)
+    ├── company_profiles.json  # Target Market·투자 단계·자격 사전 입력란 (현재 비어 있음)
     ├── technology/{figure,apptronik,1x}/   # 기업 자료 15개
     └── market/                              # 공통 시장 자료 7개
 ```
@@ -109,7 +109,7 @@ initialize_state
 2. **자기 파일만 수정.** `core/state.py`, `evaluation/criteria.py` 같은 공통 파일은 팀에 말하고 수정
 3. **출력은 `core/state.py`의 형식 그대로** (`AnalysisResult`, `InvestmentResult` 등)
 4. **검색 질의는 한국어·영어 모두 가능.** 한국어 질의는 검색 함수가 자동으로 영어로 번역합니다 (한국어 질의 Hit@5 0.719 → 0.938)
-5. **점수 합산과 INVEST/HOLD 판정은 LLM이 아니라 `evaluation.criteria.decide()`**
+5. **LLM 결과 검증과 판정은 Python**: Judge는 `validate_criteria()`로 Evidence ID·점수를 검증한 뒤 `decide()`로 판정 (LLM이 평균·Decision을 계산하지 않음)
 
 ### 검색 함수 (`rag/retriever.py`)
 
@@ -146,9 +146,9 @@ uv run python app.py --companies "Apptronik"                                    
 
 ## 5. 평가 기준 요약
 
-- 평가 항목: Bessemer Checklist 10개를 휴머노이드용으로 재작성 + **기술 성숙도(B11), 확장·양산성(B12)** → 12개 (`evaluation/criteria.py`)
+- 평가 문항: Bessemer 10개(B01~B10)를 휴머노이드용으로 구체화 + **기술 성숙도(H11), 제조·배치 확장성(H12)** → Q1~Q12 (`evaluation/criteria.py`)
 - 점수: 1~5점, 판단 불가 시 **N/A** (0점이나 1점으로 계산하지 않음)
-- 판정: 판단 가능한 항목이 **12개 중 9개 미만이면 HOLD**, 그 외에는 **평균 3.5 이상이면 INVEST**
+- 판정: 평가 가능 문항 **9개 미만 → HOLD_INSUFFICIENT_EVIDENCE**, 9개 이상이면서 **평균 3.5 이상 → INVEST**, 미만 → **HOLD**
 - Evidence Level: E0(없음) · E1(기업 주장) · E2(데모) · E3(외부 확인) · E4(실제 운영) · E5(반복·규모화)
   - 기업 자료(E1~E2)만 있으면 최대 3점, 외부 검증(E3) 이상이 있어야 4~5점
 
@@ -170,7 +170,8 @@ uv run python -m rag.evaluate run         # 검색 성능 재측정
 ## 7. 결정해야 할 것 / 남은 작업
 
 **결정 사항**
-- [ ] `data/company_profiles.json`에 팀·투자 정보 채우기 (비어 있으면 B05, B10이 항상 N/A → 모두 HOLD 위험)
+- [ ] `data/company_profiles.json`에 Target Market·투자 단계·자격(비상장, Exit 여부, 평가 기준일)과 근거 출처 입력
+- [ ] Team·Founder(Q5, Q10)는 공개 근거가 없으면 N/A → 다른 문항이 2개 더 N/A면 HOLD_INSUFFICIENT_EVIDENCE가 됨을 팀이 인지
 - [ ] 기업 자료 처리 방식: RAG 유지 / 전체 읽기(`documents/company.py`)
 - [ ] Evidence Level 매기는 기준 합의
 

@@ -1,13 +1,23 @@
-"""Report Generator (설계 산출물 2.2절, 8장)
+"""Report Generator (설계 산출물 2.1, 5장)
 
-역할: 확정된 State만으로 투자보고서 구성 (Presentation Layer)
-입력: 확정된 전체 State
+역할: 새 판단 없이 최대 5쪽 보고서와 실제 사용 출처 생성
+입력: 확정된 State
 출력: references, final_report
 
-새로운 사실·점수·Risk·투자판단을 만들거나 바꾸지 않는다 (설계 2.3절).
-REFERENCE에는 실제 평가에 사용된 Evidence의 출처만 넣는다 (설계 8.5절).
+보고서 구성 (설계 5.1)
+  1. SUMMARY + Company Snapshot   ← company_profiles, investment_results, competition_result
+  2. Technology & Product         ← technology_results
+  3. Market & Traction            ← market_traction_results
+  4. Competition / Risk / Evaluation (12문항 Scorecard) ← competition_result, investment_results
+  5. REFERENCE                    ← references
 
-TODO(담당자): _render의 초안 형식을 설계 8장 목차(5페이지)대로 완성하고 PDF로 출력
+출력 제약 (설계 5.4)
+  - 실제 State만 사용: 새 사실·Score·Risk·Decision·추가 실사 항목을 생성하지 않는다.
+  - 점수 재계산 금지: Python Rule의 FinalScore·Coverage·Decision을 그대로 표시한다.
+  - 출처 정확성: 동일 source_id 중복 제거, 사용 원본 page 병합, 누락 서지정보를 추정하지 않는다.
+  - 추천 없음도 보고: 모두 HOLD 또는 근거 부족이어도 '추천 기업 없음'과 이유를 구분해 정상 생성한다.
+
+TODO(담당자): 2·3쪽 본문, SUMMARY의 Investment Thesis·Key Risks·Missing Information 배치를 완성하고 PDF로 출력
 """
 
 from core.state import InvestmentState, ReferenceItem
@@ -38,29 +48,58 @@ def collect_references(state: InvestmentState) -> list[ReferenceItem]:
     return sorted(refs.values(), key=lambda r: r["source_id"])
 
 
+def format_reference(ref: ReferenceItem) -> str:
+    """출처 유형별 표기 형식 (설계 5.3). 누락된 값은 추정하지 않고 비워 둔다."""
+    meta = ref["reference_metadata"]
+    pages = f" (사용 페이지: p. {', '.join(map(str, ref['pages']))})"
+    url = meta.get("url") or ""
+    if meta.get("reference_type") == "web":
+        # 웹페이지: 기관명 또는 작성자(YYYY-MM-DD). 제목. 사이트명, URL
+        site = meta.get("site_name") or ref["publisher"]
+        return f"{ref['publisher']}({ref['published_date']}). *{ref['title']}*. {site}, {url}{pages}"
+    # 기관 보고서: 발행기관(YYYY). 보고서명. URL
+    return f"{ref['publisher']}({ref['published_date'][:4]}). *{ref['title']}*. {url}{pages}"
+
+
+def _coverage(result: dict) -> str:
+    n_scored = sum(c["status"] == "SCORED" for c in result["criteria"])
+    return f"{n_scored}/12 ({result['evidence_coverage']:.0%})"
+
+
 def _render(state: InvestmentState, references: list[ReferenceItem]) -> str:
     results = state["investment_results"]
     companies = state["candidate_companies"]
-    fmt = lambda v: "N/A" if v is None else f"{v:.1f}" if isinstance(v, float) else str(v)
+    profiles = state["company_profiles"]
+    fmt = lambda v: "N/A" if v is None else f"{v:.2f}" if isinstance(v, float) else str(v)
 
+    # 1. SUMMARY + Company Snapshot
     lines = ["# SUMMARY", ""]
     if state["final_route"] == "NO_INVEST":
         lines += ["**Investment Recommendation: None**", ""]
-    lines += ["| COMPANY | DECISION | SCORE | COVERAGE |", "|---|---|---|---|"]
+    lines += ["| COMPANY | DECISION | FINAL SCORE | COVERAGE |", "|---|---|---|---|"]
     for c in companies:
         r = results[c]
-        lines.append(f"| {c} | {r['decision']} | {fmt(r['final_score'])} / 5 | {r['evidence_coverage']:.0%} |")
+        lines.append(f"| {c} | {r['decision']} | {fmt(r['final_score'])} / 5 | {_coverage(r)} |")
+    lines += [""] + [f"- **{c}**: {results[c]['decision_reason']}" for c in companies]
 
-    lines += ["", "# Bessemer Scorecard", "", "| Criterion | " + " | ".join(companies) + " |",
-              "|---|" + "---|" * len(companies)]
+    lines += ["", "## Company Snapshot", "", "| COMPANY | TARGET MARKET | FUNDING STAGE |", "|---|---|---|"]
+    for c in companies:
+        p = profiles[c]
+        lines.append(f"| {c} | {p['target_market'] or '미입력'} | {p['funding_stage'] or '미확인'} |")
+
+    # 4. 12문항 Scorecard
+    lines += ["", "# Competition / Risk / Investment Evaluation", "",
+              "| Criterion | " + " | ".join(companies) + " |", "|---|" + "---|" * len(companies)]
     for crit in CRITERIA:
         scores = [next(x["score"] for x in results[c]["criteria"] if x["criterion_id"] == crit.id) for c in companies]
-        lines.append(f"| {crit.id} {crit.name} | " + " | ".join(fmt(s) for s in scores) + " |")
+        lines.append(f"| {crit.q}. {crit.name} | " + " | ".join(fmt(s) for s in scores) + " |")
+    lines.append("| **Final Score** | " + " | ".join(fmt(results[c]["final_score"]) for c in companies) + " |")
+    lines.append("| **Evidence Coverage** | " + " | ".join(_coverage(results[c]) for c in companies) + " |")
+    lines.append("| **Decision** | " + " | ".join(results[c]["decision"] for c in companies) + " |")
 
+    # 5. REFERENCE
     lines += ["", "# REFERENCE", ""]
-    lines += [f"- {r['publisher']}({r['published_date'][:4]}). *{r['title']}*. "
-              f"{r['reference_metadata'].get('url') or ''} (p. {', '.join(map(str, r['pages']))})"
-              for r in references] or ["- [STUB] 사용된 Evidence 없음"]
+    lines += [f"- {format_reference(r)}" for r in references] or ["- 평가에 사용된 Evidence 없음"]
     return "\n".join(lines)
 
 
