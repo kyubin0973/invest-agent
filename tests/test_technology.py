@@ -875,5 +875,55 @@ class TechnologyAfterRunFeedbackTests(unittest.TestCase):
         self.assertIn("watering can", prompt)  # 1차 점검에서 고른 청크가 분석 입력에 포함
 
 
+class TechnologyFinalRuleTests(unittest.TestCase):
+    """최종 수정: 끝 마침표 1개 허용, 협력 목적(collaborate to …)은 달성으로 인정하지 않음. 실제 Apptronik 문장 사용."""
+
+    A5_TITLE = ("Apptronik and Jabil Collaborate to Scale Production of Apollo Humanoid Robots and Deploy in "
+                "Manufacturing Operations 2025-02-25 Jabil Inc. (NYSE: JBL) announced a collaboration.")
+    QUOTE = ("Apptronik and Jabil Collaborate to Scale Production of Apollo Humanoid Robots and Deploy in "
+             "Manufacturing Operations.")  # 15:16 실제 응답 (원문 제목에는 마침표 없음)
+
+    def assemble(self, quote, fact, statement=None, level="E1", text=None, source="A5", qid="manufacturing"):
+        doc = document(source, source_type="partner", text=text or self.A5_TITLE)
+        return _assemble("Apptronik", [doc], claim(doc, quote, [qid], level=level, fact=fact,
+                                                   statement=statement or fact), [])
+
+    def test_trailing_period_only_difference_is_accepted_and_plan_wording_kept_as_e1(self):
+        plan = "Apptronik은 Jabil과 협력하여 Apollo 로봇의 생산을 확대할 계획이다."  # 15:16 실제 fact
+        result = self.assemble(self.QUOTE, plan)
+        self.assertEqual([(e["evidence_level"], e["fact"]) for e in result["evidence"]], [("E1", plan)])
+        self.assertEqual(len(result["findings"]), 1)
+
+    def test_collaboration_purpose_is_not_accepted_as_achieved_expansion(self):
+        for wrong in ("Apptronik은 Jabil과 협력하여 Apollo 로봇의 생산을 확대하고 있으며, 이는 대규모 배치 가능성을 높인다.",
+                      "Apptronik과 Jabil은 Apollo 로봇의 생산을 확대하기 위한 협력을 진행하고 있다.",
+                      "Apptronik은 Jabil 제조 공정에 Apollo를 배치했다."):
+            with self.subTest(wrong=wrong[:30]):
+                result = self.assemble(self.QUOTE, wrong)
+                self.assertEqual(result["evidence"], [])
+                self.assertEqual(result["findings"], [])
+                self.assertTrue(any("미래 계획 인용을 달성 사실로 서술함" in m for m in result["missing_information"]))
+
+    def test_word_number_or_extra_period_changes_are_still_rejected(self):
+        plan = "생산 확대를 위한 협력 계획이다."
+        for quote in (self.QUOTE.replace("Scale Production", "Scale Mass Production"),   # 단어 추가
+                      self.QUOTE.replace("Operations.", "Operations 2025-02-26."),      # 숫자 변경
+                      self.QUOTE.replace("Operations.", "Operations.."),                # 마침표 2개
+                      self.QUOTE.replace("Apptronik and Jabil", "Jabil and Apptronik")):  # 순서 변경
+            with self.subTest(quote=quote[-40:]):
+                result = self.assemble(quote, plan)
+                self.assertEqual(result["evidence"], [])
+                self.assertTrue(any("인용문이 원문에 없음" in m for m in result["missing_information"]))
+
+    def test_trailing_period_does_not_relax_level_rules(self):
+        # A3 제목 인용: 마침표 차이는 허용되지만, 제목은 시연 근거가 아니므로 E2는 여전히 탈락
+        result = self.assemble("Gemini Robotics 2 brings whole body intelligence to robots.",
+                               "Gemini Robotics 2가 로봇 전신 제어 기술을 소개했다.", level="E2", source="A3",
+                               text="Gemini Robotics 2 brings whole body intelligence to robots — Google DeepMind",
+                               qid="autonomy")
+        self.assertEqual(result["evidence"], [])
+        self.assertTrue(any("E2에 필요한" in m for m in result["missing_information"]))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -157,16 +157,23 @@ def _quote_in_source(quote: str, source: str) -> bool:
     2) PDF 추출에서 fi/fl 합자가 NUL(\\x00)로 깨진 경우, 원문의 그 자리에서만 인용의 fi/fl/ff를 허용한다
        (예: 원문 "speci\\x00c" ↔ 인용 "specific"). 다른 위치의 글자는 그대로 비교하므로
        단어가 바뀐 인용(예: 원문 "file" ↔ 인용 "flle")은 거부된다. 합자가 아닌 빠진 글자는 복원하지 않는다.
+    3) 인용 맨 끝의 마침표 한 개 차이만 허용한다 (예: 제목 "… Operations" ↔ 인용 "… Operations.").
     """
     normalized = _normalize_quote(quote)
     if not normalized:
         return False
-    if normalized in _normalize_quote(source):
+    candidates = [normalized]
+    if normalized.endswith(".") and normalized[:-1].strip():
+        # 3) 원문 제목처럼 마침표가 없는 구절에 LLM이 붙인 맨 끝 마침표 한 개만 허용한다. 단어·숫자는 그대로 비교.
+        candidates.append(normalized[:-1])
+    plain = _normalize_quote(source)
+    if any(c in plain for c in candidates):
         return True
     if "\x00" not in source:
         return False
     marked = _normalize_quote(source.replace("\x00", _BROKEN))
-    return any(_match_from(marked, i, normalized, 0) for i in range(len(marked)) if marked[i] in (normalized[0], _BROKEN))
+    return any(_match_from(marked, i, c, 0) for c in candidates
+               for i in range(len(marked)) if marked[i] in (c[0], _BROKEN))
 
 
 def _matches(pattern: str, text: str) -> bool:
@@ -188,6 +195,7 @@ def _confirmed_sentences(text: str) -> str:
 # 미래 계획·검증 예정 표현. 이런 문장만으로는 자율 수행·반복 안정성 실적을 뒷받침할 수 없다.
 _PLAN = (r"\b(will|would|aim\w*|plan\w*|goal\w*|upcoming|in the future|future plans?|intend\w*|expect\w*|going to|designed to)\b|"
          r"\bannounced\b.{0,60}\b(pilot|collaboration|partnership|agreement)\b|"  # 협력·파일럿 발표 = 계획 단계
+         r"\bcollaborat\w*\s+to\s+(scale|build|deploy)\b|"  # 협력의 목적 = 달성 아님
          r"계획|목표|예정|향후")
 _ANNOUNCED = r"\bannounced\b.{0,60}\b(pilot|collaboration|partnership|agreement)\b"
 # 진행·달성으로 서술한 표현 (발표 사실만 옮긴 문장과 구분)
