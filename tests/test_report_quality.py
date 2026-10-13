@@ -93,6 +93,35 @@ class ReportQualityTests(unittest.TestCase):
         self.state["final_report"] = self.state["final_report"].replace(NORMAL, "A는 100대의 로봇을 배치했다.")
         self.assertIn("인용이 없습니다", self.reasons(self.evaluate()))
 
+    def test_computed_verdict_rows_and_policy_reach_judge_without_citations(self):
+        lines = [
+            "| Figure AI | INVEST | 3.22 | 12/12 (100%) |",
+            "| A | HOLD | 3.00 | 9개 (75%) |",
+            "| B | HOLD_INSUFFICIENT_EVIDENCE | N/A | 8문항 (67%) |",
+            "**판정 기준**: 12개 항목 중 9개 이상, 평균 3.2 이상이면 INVEST",
+        ]
+        self.state["final_report"] = self.state["final_report"].replace(
+            "# REFERENCE", "\n".join(lines) + "\n# REFERENCE")
+        judge = Mock(side_effect=passing_judge)
+        result = self.evaluate(judge=judge)
+        self.assertTrue(result["passed"])
+        judge.assert_called_once()
+        claims = [claim["statement"] for claim in judge.call_args.args[0]["claims"]]
+        for line in lines:
+            self.assertIn(line, claims)
+
+    def test_factual_numeric_table_rows_still_require_citations(self):
+        for line in ("| Figure AI | 100대 |", "| Figure AI | INVEST | 3.22 | 100대 배치 |"):
+            with self.subTest(line=line):
+                state = deepcopy(self.state)
+                state["final_report"] = state["final_report"].replace(
+                    "# REFERENCE", line + "\n# REFERENCE")
+                judge = Mock(side_effect=passing_judge)
+                result = self.evaluate(state=state, judge=judge)
+                self.assertFalse(result["passed"])
+                self.assertIn("인용이 없습니다", self.reasons(result))
+                judge.assert_not_called()
+
     def test_nonfactual_checklist_identifier_is_left_to_judge(self):
         self.state["final_report"] = self.state["final_report"].replace(
             "# REFERENCE", "추가 확인 항목: H11.\n# REFERENCE")

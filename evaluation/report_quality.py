@@ -150,6 +150,21 @@ def _issue(criterion: str, reason: str, fix: str, claim: dict | None = None,
             "company": company, "reason": reason, "requested_fix": fix}
 
 
+def _is_computed_summary(statement: str) -> bool:
+    """Recognize policy labels and verdict rows, while keeping them for Judge review."""
+    text = re.sub(r"\*\*|__", "", statement).strip()
+    if re.match(r"^(?:[-*+]\s+)?판정\s*기준\s*[:：]", text):
+        return True
+    if not (text.startswith("|") and text.endswith("|")):
+        return False
+    cells = [cell.strip() for cell in text.strip("|").split("|")]
+    if len(cells) < 3 or cells[1] not in {"INVEST", "HOLD", "HOLD_INSUFFICIENT_EVIDENCE"}:
+        return False
+    # A factual sentence appended to a table cell must still require a citation.
+    return all(re.fullmatch(r"(?:[\d\s.,/%()+\-]|개|문항)+|N/A|None|—", cell)
+               for cell in cells[2:])
+
+
 def _add_evidence(registry: dict, item: dict, issues: list[dict]) -> None:
     pair = (item.get("source_id"), item.get("chunk_id"))
     if not all(isinstance(v, str) and v.strip() for v in pair):
@@ -210,7 +225,8 @@ def prepare_input(state: dict, original_documents: dict | None = None) -> tuple[
         numeric_assertion = re.search(
             r"\d+(?:[.,]\d+)?\s*(?:%|대|명|개|억|만|조|달러|원|년|개월|시간|일|회|USD|KRW|billion|million)"
             r"|\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b", text, re.I)
-        if not pairs and (numeric_assertion or any(s in text for s in known_statements)):
+        if (not pairs and not _is_computed_summary(claim["statement"])
+                and (numeric_assertion or any(s in text for s in known_statements))):
             issues.append(_issue("groundedness", "수치 또는 근거 기반 분석 문장에 인용이 없습니다.",
                                  "근거를 연결하거나 사실이 아닌 표기임을 명확히 하세요.", claim))
         for pair, ref_id in zip(pairs, claim["evidence_ids"]):
