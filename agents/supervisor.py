@@ -8,8 +8,11 @@ Supervisor가 현재 State를 보고 다음에 부를 Agent 하나를 정한다 
 - 분기(route): Supervisor가 정한 `next`를 그대로 돌려주는 Gate. add_conditional_edges에 연결한다.
 
 근거 충분성: 평가 가능 문항이 MIN_SCORED_CRITERIA(9개) 미만인 기업은 근거 부족으로 보고,
-N/A 문항의 근거를 맡은 분석 Agent에 재작업을 요청한다. 재작업·보고서 재작성·전체 단계 수에는
-모두 상한이 있어 무한 루프가 생기지 않는다.
+N/A 문항의 근거를 맡은 분석 Agent에 재작업을 요청한다.
+품질 평가: 미달 지적의 담당(owner)이 분석 Agent면 그 Agent에 재작업을 요청한 뒤 보고서를 다시 쓰고,
+담당이 Report Generator면 보고서만 다시 쓴다.
+보고서 작성 시점은 단계 수가 아니라 위 판단으로 정한다. 재작업·보고서 재작성·전체 단계 수의 상한은
+끝나지 않는 Loop에서 빠져나오기 위한 장치다.
 """
 
 import logging
@@ -85,8 +88,25 @@ def assess_sufficiency(state: InvestmentState) -> list[ReworkRequest]:
                     "agent": agent,
                     "criterion_ids": ids,
                     "reason": f"평가 가능 문항 {scored}개 (최소 {MIN_SCORED_CRITERIA}개), 근거 부족 문항 {', '.join(ids)}",
+                    "feedback": [],
                 })
     return requests
+
+
+def quality_rework_requests(state: InvestmentState) -> list[ReworkRequest]:
+    """품질 평가의 미달 지적 중 담당이 분석 Agent인 것을 기업·Agent별 재작업 요청으로 묶는다."""
+    grouped: dict[tuple[str, str], list[str]] = {}
+    for check in (state.get("quality_result") or {}).get("checks", []):
+        if check["passed"]:
+            continue
+        for issue in check["issues"]:
+            if issue["owner"] in ANALYSIS_AGENTS and issue["company"] in state["candidate_companies"]:
+                note = f"[{check['item']}] {issue['statement']} — {issue['reason']}"
+                grouped.setdefault((issue["company"], issue["owner"]), []).append(note)
+    return [
+        {"company": company, "agent": agent, "criterion_ids": [], "reason": f"품질 평가 지적 {len(notes)}건", "feedback": notes}
+        for (company, agent), notes in grouped.items()
+    ]
 
 
 def _empty_analysis(message: str) -> AnalysisResult:
@@ -125,7 +145,7 @@ def decide(state: InvestmentState) -> Decision:
     if failure:
         return failure
     if steps_left <= 0:
-        done = bool(state.get("final_report")) and state.get("report_evaluated")
+        done = bool(state.get("final_report")) and state["report_evaluated"]
         return Decision(FINISH, "단계 상한 도달", updates={"status": "SUCCESS" if done else "FAILED"})
 
     # 1) 분석이 없는 기업·관점부터 채운다
@@ -134,18 +154,29 @@ def decide(state: InvestmentState) -> Decision:
             if company not in state[RESULT_KEY[agent]]:
                 return Decision(agent, "분석 결과 없음", company)
 
-    # 2) 근거 충분성: 모든 후보를 한 번씩 평가한 뒤, 근거가 부족한 기업은 담당 Agent에 재작업 요청
+    # 2) 재작업 요청: 모든 후보를 한 번씩 평가한 뒤에 판단한다
+    #    - 첫 보고서 전: 근거가 부족한 기업의 N/A 문항 담당 Agent
+    #    - 품질 평가 미달 후: 지적된 문장의 담당 Agent (보고서를 다시 쓸 수 있을 때만)
     pending = state["pending_judge"]
-    all_judged = all(c in state["investment_results"] for c in companies)
-    if all_judged and not state.get("final_report"):
-        for request in assess_sufficiency(state):
+    attempts = state["report_attempts"]
+    quality = state.get("quality_result") or {}
+    quality_failed = state["report_evaluated"] and not quality.get("passed", True)
+    can_rewrite = attempts < MAX_REPORT_ATTEMPTS
+    if all(c in state["investment_results"] for c in companies):
+        if attempts == 0:
+            requests, label = assess_sufficiency(state), "근거 부족"
+        elif quality_failed and can_rewrite:
+            requests, label = quality_rework_requests(state), "품질 평가 미달"
+        else:
+            requests, label = [], ""
+        for request in requests:
             key = f"{request['company']}:{request['agent']}"
             count = state["rework_counts"].get(key, 0)
             rejudge = len(set(pending) | {request["company"]})
             needed = 1 + 1 + rejudge + 2  # 재작업 + 비교 + 재평가 + 보고서·품질 평가
             if count < MAX_REWORK_PER_AGENT and needed <= steps_left:
                 return Decision(
-                    request["agent"], f"근거 부족 → 재작업 요청: {request['reason']}", request["company"], request,
+                    request["agent"], f"{label} → 재작업 요청: {request['reason']}", request["company"], request,
                     updates={
                         "rework_counts": {**state["rework_counts"], key: count + 1},
                         "pending_judge": pending if request["company"] in pending else [*pending, request["company"]],
@@ -164,18 +195,20 @@ def decide(state: InvestmentState) -> Decision:
         return Decision(JUDGE, reason, pending[0], updates={"pending_judge": pending[1:]})
 
     # 5) 보고서 작성 → 품질 평가 → 미달이면 재작성
-    attempts = state["report_attempts"]
     write = {"report_attempts": attempts + 1, "report_evaluated": False}
-    if not state.get("final_report"):
+    if attempts == 0:
         invest = any(r["decision"] == "INVEST" for r in state["investment_results"].values())
-        final_route = "INVEST_FOUND" if invest else "NO_INVEST"
-        return Decision(REPORT, "근거 충분성 확인 완료 (재작업 여지 없음)", updates={**write, "final_route": final_route})
+        short = sorted({r["company"] for r in assess_sufficiency(state)})
+        reason = (
+            f"근거 부족 기업({', '.join(short)})의 재작업 상한 도달 → 남은 문항 N/A 확정" if short
+            else f"근거 충분: 모든 후보의 평가 가능 문항 {MIN_SCORED_CRITERIA}개 이상"
+        )
+        return Decision(REPORT, reason, updates={**write, "final_route": "INVEST_FOUND" if invest else "NO_INVEST"})
     if not state["report_evaluated"]:
         return Decision(QUALITY, f"보고서 {attempts}차 작성 완료", updates={"report_evaluated": True})
-    quality = state.get("quality_result") or {}
     if quality.get("passed"):
         return Decision(FINISH, "보고서 품질 평가 통과", updates={"status": "SUCCESS"})
-    if attempts < MAX_REPORT_ATTEMPTS and steps_left >= 2:
+    if can_rewrite and steps_left >= 2:
         failed = [c["item"] for c in quality.get("checks", []) if not c["passed"]]
         return Decision(REPORT, f"품질 평가 미달({', '.join(failed)}) → 재작성", updates=write)
     return Decision(FINISH, "품질 평가 미달이지만 재작성 상한 도달", updates={"status": "SUCCESS"})

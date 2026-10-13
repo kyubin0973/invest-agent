@@ -36,6 +36,7 @@ AnalysisAgent = Literal["technology", "market_traction"]
 RunStatus = Literal["RUNNING", "SUCCESS", "FAILED"]
 NodeStatus = Literal["DONE", "FAILED"]
 QualityItem = Literal["groundedness", "neutrality", "bias_control"]
+QualityOwner = Literal["technology", "market_traction", "report_generator"]
 
 
 # ---------------------------------------------------------------------------
@@ -162,20 +163,28 @@ class ReworkRequest(TypedDict):
 
     company: str
     agent: AnalysisAgent
-    criterion_ids: list[str]  # 근거가 부족한 평가 문항 (B01~B10, H11~H12)
+    criterion_ids: list[str]  # 근거가 부족한 평가 문항 (B01~B10, H11~H12). 품질 평가에서 온 요청이면 빈 목록
     reason: str
+    feedback: list[str]  # 품질 평가가 지적한 문장과 이유. 근거 부족에서 온 요청이면 빈 목록
+
+
+class QualityIssue(TypedDict):
+    owner: QualityOwner  # 수정할 담당
+    company: str | None  # 담당이 분석 Agent면 대상 기업
+    statement: str  # 문제가 된 보고서 문장
+    reason: str  # 미달 이유
 
 
 class QualityCheck(TypedDict):
     item: QualityItem
     passed: bool
-    issues: list[str]  # 미달 사유 (통과하면 빈 목록)
+    issues: list[QualityIssue]  # 통과하면 빈 목록
 
 
 class QualityResult(TypedDict):
     passed: bool  # 모든 항목 통과 여부 (Python 규칙으로 계산)
     checks: list[QualityCheck]
-    feedback: list[str]  # Report Generator가 재작성할 때 반영할 지시
+    feedback: list[str]  # Report Generator가 재작성할 때 반영할 지시 (담당이 report_generator인 지적)
 
 
 class ErrorItem(TypedDict):

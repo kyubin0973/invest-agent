@@ -29,7 +29,9 @@ class Workers:
     """호출 순서를 기록하는 하위 Agent 대역. 재작업을 받은 기업은 다음 평가에서 근거가 충분해진다."""
 
     def __init__(self, missing: dict[str, tuple[str, ...]] | None = None, quality: list[bool] | None = None,
-                 fail: dict[str, int] | None = None, fixed_by_rework: bool = True):
+                 fail: dict[str, int] | None = None, fixed_by_rework: bool = True,
+                 issue_owner: tuple[str, str | None] = (REPORT, None)):
+        self.issue_owner = issue_owner
         self.calls: list[tuple] = []
         self.missing = missing or {}
         self.quality = quality or [True]
@@ -72,7 +74,9 @@ class Workers:
     def quality_node(self, state):
         self._run(QUALITY, state)
         passed = self.quality[min(state["report_attempts"], len(self.quality)) - 1]
-        checks = [{"item": "groundedness", "passed": passed, "issues": [] if passed else ["출처 없는 문장"]}]
+        owner, company = self.issue_owner
+        issue = {"owner": owner, "company": company, "statement": "출처 없는 문장", "reason": "REFERENCE에 없음"}
+        checks = [{"item": "groundedness", "passed": passed, "issues": [] if passed else [issue]}]
         return {"quality_result": {"passed": passed, "checks": checks, "feedback": []}}
 
     def nodes(self) -> dict:
@@ -142,6 +146,32 @@ class SupervisorGraphTests(unittest.TestCase):
         state = run(workers)
         self.assertEqual(state["report_attempts"], supervisor.MAX_REPORT_ATTEMPTS)
         self.assertFalse(state["quality_result"]["passed"])
+        self.assertEqual(state["next"], FINISH)
+
+    def test_quality_issue_owned_by_analysis_agent_is_reworked_before_rewrite(self):
+        workers = Workers(quality=[False, True], issue_owner=(MARKET, "A"))
+        state = run(workers)
+        tail = workers.calls[workers.calls.index((REPORT, None, False)):]
+        self.assertEqual(
+            [c[:2] for c in tail],
+            [(REPORT, None), (QUALITY, None), (MARKET, "A"), (COMPETITION, None), (JUDGE, "A"), (REPORT, None), (QUALITY, None)],
+        )
+        self.assertTrue(tail[2][2])  # Market은 재작업 요청으로 호출된다
+        self.assertEqual(state["rework_counts"], {f"A:{MARKET}": 1})
+        self.assertEqual(state["status"], "SUCCESS")
+
+    def test_quality_issue_goes_to_rewrite_when_agent_rework_is_used_up(self):
+        # A사 Market은 근거 부족으로 이미 재작업했으므로, 품질 지적은 보고서 재작성으로만 처리한다
+        workers = Workers(missing={"A": ("B01", "B03", "B05", "B07")}, quality=[False, True], issue_owner=(MARKET, "A"))
+        state = run(workers)
+        self.assertEqual([c[0] for c in workers.calls][-4:], [REPORT, QUALITY, REPORT, QUALITY])
+        self.assertEqual(state["rework_counts"], {f"A:{MARKET}": 1})
+
+    def test_no_rework_after_last_report(self):
+        workers = Workers(quality=[False], issue_owner=(TECH, "B"))
+        state = run(workers)
+        self.assertEqual(sum(1 for c in workers.calls if c[2]), 1)
+        self.assertEqual(state["report_attempts"], supervisor.MAX_REPORT_ATTEMPTS)
         self.assertEqual(state["next"], FINISH)
 
     def test_failed_worker_is_retried_then_excluded(self):
