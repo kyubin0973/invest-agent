@@ -6,13 +6,22 @@ No routing, counters, retrieval or shared State mutation is performed here.
 from copy import deepcopy
 from hashlib import sha256
 import json
+import logging
 import os
 import re
 from typing import Callable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+logger = logging.getLogger(__name__)
+
 ITEMS = ("groundedness", "neutrality", "bias_control")
+# 출처 계보(동일 발표 재인용 확인용 메타데이터)는 현재 문서 풀에 없는 정보다.
+# 분석 Agent가 재작업으로 채울 수 없으므로 미달 사유로 쓰지 않고 미확인 정보로만 남긴다.
+# Judge가 확인했다고 답한 문장의 최소 비율. 긴 보고서에서 ID 몇 개를 빠뜨리는 것은 허용하되,
+# 대부분을 확인하지 않은 응답은 구조 실패로 본다.
+MIN_CLAIM_COVERAGE = 0.8
+LINEAGE = re.compile(r"source_family_id|origin_source_id|출처\s*계보|소스\s*계보", re.I)
 SCHEMA_VERSION = "report-quality-v1"
 CITATION = re.compile(r"\[([A-Za-z0-9_.:-]+)\s*\|\s*([A-Za-z0-9_.:-]+)\]")
 HEADER = re.compile(r"^\s*#{1,6}\s+(.+)$")
@@ -304,6 +313,13 @@ def prepare_input(state: dict, original_documents: dict | None = None) -> tuple[
 
 
 def validate_judge(raw: object, payload: dict) -> JudgeOutput:
+    """Judge 응답을 검증한다.
+
+    - 응답 구조(스키마·평가 항목 구성)가 틀리면 QualityJudgeError로 실패시킨다 (Supervisor가 재시도).
+    - 개별 지적의 참조가 어긋난 경우(없는 문장·근거 ID, 기업 누락 등)는 응답 전체를 버리지 않고
+      어긋난 부분만 제외하거나 보고서 전체·보고서 담당 지적으로 낮춘다. 지적 사유는 버리지 않는다.
+      보정한 내용은 로그에 남긴다.
+    """
     try:
         raw = raw.model_dump() if isinstance(raw, BaseModel) else raw
         if redact_secrets(raw) != raw:
@@ -311,65 +327,72 @@ def validate_judge(raw: object, payload: dict) -> JudgeOutput:
         output = JudgeOutput.model_validate(raw)
         if sorted(c.item for c in output.checks) != sorted(ITEMS):
             raise ValueError("missing/duplicate criteria")
-        claims = {c["claim_id"]: c for c in payload["claims"]}
-        if sorted(output.checked_claim_ids) != sorted(claims):
-            raise ValueError("incomplete claim coverage")
-        available = {(e["source_id"], e["chunk_id"]) for e in payload["evidence"]}
         for check in output.checks:
-            if not check.reason.strip() or any(not text.strip() for text in check.missing_information):
+            if not check.reason.strip():
                 raise ValueError("blank reason")
-            for issue in check.issues:
-                if not issue.reason.strip() or not issue.requested_fix.strip():
-                    raise ValueError("blank issue")
-                if issue.claim_id is not None and issue.claim_id not in claims:
-                    raise ValueError("unknown claim")
-                if any((r.source_id, r.chunk_id) not in available for r in issue.evidence_ids):
-                    raise ValueError("unknown evidence")
-                if issue.claim_id is not None:
-                    cited = {(r["source_id"], r["chunk_id"]) for r in claims[issue.claim_id]["evidence_ids"]}
-                    if any((r.source_id, r.chunk_id) not in cited for r in issue.evidence_ids):
-                        raise ValueError("issue cites evidence unrelated to its claim")
-                if issue.suggested_owner != "report_generator" and issue.company not in payload["candidate_companies"]:
-                    raise ValueError("analysis issue needs company")
-                if issue.company is not None and issue.company not in payload["candidate_companies"]:
-                    raise ValueError("unknown company")
-        return output
+            if any(not i.reason.strip() or not i.requested_fix.strip() for i in check.issues):
+                raise ValueError("blank issue")
+        claim_ids = {c["claim_id"] for c in payload["claims"]}
+        covered = len(claim_ids & set(output.checked_claim_ids))
+        if claim_ids and covered < MIN_CLAIM_COVERAGE * len(claim_ids):
+            raise ValueError("incomplete claim coverage")
+    except ValueError as exc:
+        # pydantic 오류 본문에는 응답 내용이 들어갈 수 있어 종류만 남긴다
+        cause = str(exc) if type(exc) is ValueError else type(exc).__name__
+        logger.warning("QA Judge 응답 구조 검증 실패: %s", cause)
+        raise QualityJudgeError(f"QA Judge 응답 구조 또는 입력 참조 검증 실패 ({cause})") from None
     except Exception:
         raise QualityJudgeError("QA Judge 응답 구조 또는 입력 참조 검증 실패") from None
 
+    claims = {c["claim_id"]: c for c in payload["claims"]}
+    available = {(e["source_id"], e["chunk_id"]) for e in payload["evidence"]}
+    companies = payload["candidate_companies"]
+    dropped: list[str] = []
+    unchecked = sorted(set(claims) - set(output.checked_claim_ids))
+    if unchecked:
+        dropped.append(f"Judge가 확인했다고 답하지 않은 문장 {len(unchecked)}개")
 
-def _judge_issues(item: str, check: JudgeCheck, payload: dict, state: dict) -> list[dict]:
+    checks = []
+    for check in output.checks:
+        issues = []
+        for issue in check.issues:
+            claim_id = issue.claim_id
+            if claim_id is not None and claim_id not in claims:
+                # 지적 사유는 살리고, 가리킨 문장만 알 수 없으므로 보고서 전체에 대한 지적으로 둔다
+                dropped.append(f"[{check.item}] 보고서에 없는 문장 ID({claim_id})를 보고서 전체 지적으로 변경")
+                claim_id = None
+            refs = [r for r in issue.evidence_ids if (r.source_id, r.chunk_id) in available]
+            if claim_id is not None:
+                cited = {(r["source_id"], r["chunk_id"]) for r in claims[claim_id]["evidence_ids"]}
+                refs = [r for r in refs if (r.source_id, r.chunk_id) in cited]
+            if len(refs) != len(issue.evidence_ids):
+                dropped.append(f"[{check.item}] 입력에 없거나 문장과 무관한 근거 ID {len(issue.evidence_ids) - len(refs)}개 제외")
+            owner, company = issue.suggested_owner, issue.company
+            if company is not None and company not in companies:
+                company = None
+            if owner != "report_generator" and company is None:
+                dropped.append(f"[{check.item}] 대상 기업이 없는 분석 담당 지적을 보고서 담당으로 변경")
+                owner = "report_generator"
+            issues.append(issue.model_copy(update={
+                "claim_id": claim_id, "evidence_ids": refs, "suggested_owner": owner, "company": company}))
+        missing = [text for text in check.missing_information if text.strip()]
+        checks.append(check.model_copy(update={"issues": issues, "missing_information": missing}))
+    if dropped:
+        logger.warning("QA Judge 응답 일부 보정: %s", "; ".join(dict.fromkeys(dropped)))
+    return output.model_copy(update={"checks": checks})
+
+
+def _judge_issues(item: str, check: JudgeCheck, payload: dict, state: dict) -> tuple[list[dict], list[str]]:
+    """Judge 지적을 공통 지적 형식으로 바꾼다. 출처 계보 지적은 (지적, 미확인 정보) 중 뒤쪽으로 돌린다."""
     by_id = {c["claim_id"]: c for c in payload["claims"]}
-    issues = []
+    issues, lineage = [], []
     for issue in check.issues:
-        claim = by_id.get(issue.claim_id)
-        refs = [r.model_dump() for r in issue.evidence_ids]
-        if not re.search(r"source_family_id|origin_source_id|출처\s*계보|소스\s*계보", issue.reason + " " + issue.requested_fix, re.I):
-            issues.append(_issue(item, issue.reason, issue.requested_fix, claim, refs,
-                                 issue.suggested_owner, issue.company))
+        if LINEAGE.search(issue.reason + " " + issue.requested_fix):
+            lineage.append(issue.reason)
             continue
-        # Metadata repair belongs to the analyses that supplied the cited source.
-        selected = refs or (claim["evidence_ids"] if claim else [])
-        pairs = {(r["source_id"], r["chunk_id"]) for r in selected}
-        if not pairs:
-            pairs = {(e["source_id"], e["chunk_id"]) for e in payload["evidence"]
-                     if not (e.get("reference_metadata") or {}).get("source_family_id")
-                     and not (e.get("reference_metadata") or {}).get("origin_source_id")}
-        targets = {}
-        for owner, key in (("technology", "technology_results"), ("market_traction", "market_traction_results")):
-            for company, analysis in (state.get(key) or {}).items():
-                if company not in payload["candidate_companies"] or (issue.company and company != issue.company):
-                    continue
-                owned = [{"source_id": e.get("source_id"), "chunk_id": e.get("chunk_id")}
-                         for e in analysis.get("evidence", [])
-                         if (e.get("source_id"), e.get("chunk_id")) in pairs]
-                if owned:
-                    targets[owner, company] = owned
-        if not targets:
-            raise QualityJudgeError("QA 출처 계보 지적의 분석 담당·기업을 근거에서 확인할 수 없습니다.")
-        for (owner, company), owned in targets.items():
-            issues.append(_issue(item, issue.reason, issue.requested_fix, claim, owned, owner, company))
-    return issues
+        issues.append(_issue(item, issue.reason, issue.requested_fix, by_id.get(issue.claim_id),
+                             [r.model_dump() for r in issue.evidence_ids], issue.suggested_owner, issue.company))
+    return issues, lineage
 
 
 def evaluate(state: dict, *, original_documents: dict | None = None,
@@ -403,16 +426,22 @@ def evaluate(state: dict, *, original_documents: dict | None = None,
         checks = []
         for item in ITEMS:
             check = next(c for c in output.checks if c.item == item)
-            issues = _judge_issues(item, check, payload, state)
-            checks.append({"item": item, "passed": check.verdict == "pass", "verdict": check.verdict,
-                           "reason": check.reason, "issues": issues, "missing_information": check.missing_information})
+            issues, lineage = _judge_issues(item, check, payload, state)
+            verdict, reason = check.verdict, check.reason
+            missing_information = list(dict.fromkeys(check.missing_information + lineage))
+            if verdict != "pass" and lineage and not issues:
+                # 미달 사유가 출처 계보 부재뿐이면 통과로 보고, 한계는 미확인 정보에 남긴다
+                verdict = "pass"
+                reason = "출처 계보 부재는 미확인 정보로 기록 (미달 사유 아님); " + reason
+            checks.append({"item": item, "passed": verdict == "pass", "verdict": verdict,
+                           "reason": reason, "issues": issues, "missing_information": missing_information})
         if rules:
             checks[0].update(passed=False, verdict="fail",
                              reason="근거·보고서 입력 규칙 미달; " + checks[0]["reason"],
                              issues=rules + checks[0]["issues"],
                              missing_information=list(dict.fromkeys(limitations + checks[0]["missing_information"])))
         # 출처 계보 필드는 기존 계약의 필수값이 아니다. 기존 URL·발행기관·원문을
-        # 함께 본 Judge의 내용 판정을 사용하며 불확실 판정은 여전히 불합격이다.
+        # 함께 본 Judge의 내용 판정을 사용하며, 계보 부재 외의 불확실 판정은 여전히 불합격이다.
     return {"passed": judge_used and all(c["passed"] for c in checks), "checks": checks,
             "feedback": [f"[{c['item']}] {i['statement']} — {i['reason']} 수정: {i['requested_fix']}"
                          for c in checks for i in c["issues"] if i["owner"] == "report_generator"],

@@ -320,13 +320,16 @@ class ReportQualityTests(unittest.TestCase):
         self.assertEqual(issue["statement"], "보고서 전체")
         self.assertIsNone(issue["company"])
 
-    def test_string_null_company_still_rejected_for_analysis_owner(self):
+    def test_string_null_company_for_analysis_owner_is_downgraded_to_report_owner(self):
+        # 대상 기업이 없는 분석 담당 지적은 응답 전체를 버리지 않고 보고서 담당 지적으로 낮춘다
         def judge(payload):
             response = issue_judge("groundedness", "분석 오류", "technology")(payload)
             response["checks"][0]["issues"][0]["company"] = "null"
             return response
-        with self.assertRaises(QualityJudgeError):
-            self.evaluate(judge=judge)
+        result = self.evaluate(judge=judge)
+        issue = result["checks"][0]["issues"][0]
+        self.assertFalse(result["passed"])
+        self.assertEqual((issue["owner"], issue["company"]), ("report_generator", None))
 
     def test_null_normalization_does_not_hide_missing_claim_coverage(self):
         def judge(payload):
@@ -358,21 +361,30 @@ class ReportQualityTests(unittest.TestCase):
         inconsistent = issue_judge("groundedness", "원문 불일치")(payload)
         inconsistent["checks"][0]["verdict"] = "pass"
         bad.append(inconsistent)
-        unknown = issue_judge("groundedness", "원문 불일치")(payload)
-        unknown["checks"][0]["issues"][0]["claim_id"] = "line:999"
-        bad.append(unknown)
         for response in bad:
             with self.subTest(response=response):
                 with self.assertRaises(QualityJudgeError):
                     self.evaluate(judge=lambda _, r=response: r)
 
-    def test_analysis_owner_requires_valid_company(self):
+    def test_issue_with_unknown_claim_becomes_whole_report_issue(self):
+        # 보고서에 없는 문장 ID를 가리킨 지적은 사유를 살려 보고서 전체 지적으로 둔다. 미달 판정은 그대로다
+        payload, _, _ = prepare_input(self.state, self.originals)
+        unknown = issue_judge("groundedness", "원문 불일치")(payload)
+        unknown["checks"][0]["issues"][0]["claim_id"] = "line:999"
+        result = self.evaluate(judge=lambda _: unknown)
+        self.assertFalse(result["passed"])
+        issue = result["checks"][0]["issues"][0]
+        self.assertEqual(issue["statement"], "보고서 전체")
+        self.assertIn("원문 불일치", issue["reason"])
+
+    def test_analysis_owner_without_company_is_downgraded_to_report_owner(self):
         def bad(payload):
             response = issue_judge("groundedness", "근거 부족", "technology")(payload)
             response["checks"][0]["issues"][0]["company"] = None
             return response
-        with self.assertRaises(QualityJudgeError):
-            self.evaluate(judge=bad)
+        result = self.evaluate(judge=bad)
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["checks"][0]["issues"][0]["owner"], "report_generator")
 
     def test_input_is_not_mutated(self):
         before = deepcopy((self.state, self.originals))

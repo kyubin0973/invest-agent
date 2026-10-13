@@ -1,9 +1,11 @@
 import threading
 import unittest
 
+from rag.config import VECTORSTORE_DIR
 from rag.retriever import get_vectorstore, search_industry, search_technology
 
 
+@unittest.skipUnless(VECTORSTORE_DIR.exists(), "벡터DB가 없음: `uv run python -m rag.build_index` 실행 후 검증")
 class RetrieverConcurrencyTests(unittest.TestCase):
     def test_parallel_first_search_shares_one_vectorstore(self):
         """Technology ∥ Market처럼 여러 스레드가 동시에 처음 검색해도 충돌 없이 같은 벡터DB를 쓴다."""

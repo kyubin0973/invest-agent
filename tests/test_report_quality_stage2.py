@@ -35,7 +35,7 @@ class StageTwoTests(unittest.TestCase):
 
     def test_policy_distinguishes_disclosed_limits_from_unsupported_success(self):
         from prompts.report_quality import SYSTEM_PROMPT, QA_PROMPT_VERSION
-        self.assertEqual(QA_PROMPT_VERSION, 'report-quality-v5')
+        self.assertEqual(QA_PROMPT_VERSION, 'report-quality-v6')
         self.assertIn('검사 범위는 보고서가 실제로 주장한 내용', SYSTEM_PROMPT)
         self.assertIn('기업 발표를 출처에 귀속해 제한적으로 소개하는 것 자체는 편향이 아니다', SYSTEM_PROMPT)
         self.assertIn('근거 유무와 관계없이 금지', SYSTEM_PROMPT)
@@ -62,22 +62,34 @@ class StageTwoTests(unittest.TestCase):
 
     def test_malformed_responses_cannot_pass(self):
         state, originals, _ = semantic_fixture('normal')
-        mutations = {
-            'duplicate_claim': lambda r: r['checked_claim_ids'].append(r['checked_claim_ids'][0]),
+        # 응답 구조가 틀린 경우: 전체를 실패시킨다 (Supervisor 재시도)
+        structural = {
+            'empty_coverage': lambda r: r.update(checked_claim_ids=[]),
             'unknown_check': lambda r: r['checks'][0].update(item='profit'),
             'blank_reason': lambda r: r['checks'][0].update(reason=' '),
             'unknown_owner': lambda r: r['checks'][0]['issues'][0].update(suggested_owner='supervisor'),
             'blank_fix': lambda r: r['checks'][0]['issues'][0].update(requested_fix=' '),
-            'unknown_company': lambda r: r['checks'][0]['issues'][0].update(suggested_owner='technology', company='B'),
-            'unrelated_evidence': lambda r: r['checks'][0]['issues'][0].update(evidence_ids=[{'source_id':'S2','chunk_id':'S2_P01_C01'}]),
             'uncertain_no_missing': lambda r: r['checks'][0].update(verdict='uncertain', missing_information=[]),
         }
-        for label, mutate in mutations.items():
+        for label, mutate in structural.items():
             with self.subTest(case=label):
                 response = issue_judge('groundedness', '재검증 필요')(prepare_input(state, originals)[0])
                 mutate(response)
                 with self.assertRaises(QualityJudgeError):
                     evaluate(state, original_documents=originals, judge=lambda _: deepcopy(response))
+        # 개별 지적의 참조만 어긋난 경우: 그 부분만 보정하고 평가는 이어간다. 미달 판정은 유지된다
+        salvaged = {
+            'duplicate_claim': lambda r: r['checked_claim_ids'].append(r['checked_claim_ids'][0]),
+            'unknown_company': lambda r: r['checks'][0]['issues'][0].update(suggested_owner='technology', company='B'),
+            'unrelated_evidence': lambda r: r['checks'][0]['issues'][0].update(evidence_ids=[{'source_id':'S2','chunk_id':'S2_P01_C01'}]),
+        }
+        for label, mutate in salvaged.items():
+            with self.subTest(case=label):
+                response = issue_judge('groundedness', '재검증 필요')(prepare_input(state, originals)[0])
+                mutate(response)
+                result = evaluate(state, original_documents=originals, judge=lambda _: deepcopy(response))
+                self.assertTrue(result['judge_used'])
+                self.assertFalse(result['passed'])
 
     def test_benchmark_default_has_no_model_call_or_pass_claim(self):
         with patch('evaluation.report_quality_runner.evaluate_report', side_effect=AssertionError('no API')):

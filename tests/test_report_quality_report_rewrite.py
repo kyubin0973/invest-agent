@@ -40,28 +40,31 @@ class HybridRoutingTests(unittest.TestCase):
             'requested_fix': '원본 발표의 계보를 확인하세요.'}])
         return output
 
-    def test_whole_report_lineage_issue_routes_to_actual_analysis_owners(self):
+    def test_lineage_only_issue_is_recorded_as_missing_information_not_failure(self):
+        # 출처 계보는 문서 풀에 없는 정보라 재작업으로 채울 수 없다: 미달·재작업 사유가 아니라 미확인 정보로 남긴다
         self.state['technology_results']['A']['evidence'][0]['reference_metadata'].pop('source_family_id')
         self.state['references'][0]['reference_metadata'].pop('source_family_id')
         self.state['market_traction_results']['A'] = deepcopy(self.state['technology_results']['A'])
         result = evaluate_report(self.state, original_documents=self.originals, judge=self.lineage_judge)
-        issues = result['checks'][2]['issues']
-        self.assertEqual({(i['owner'], i['company']) for i in issues},
-                         {('technology', 'A'), ('market_traction', 'A')})
-        self.assertEqual(result['feedback'], [])
-        requests = quality_rework_requests({**self.state, 'quality_result': result})
-        self.assertEqual({r['agent'] for r in requests}, {'technology', 'market_traction'})
+        bias = result['checks'][2]
+        self.assertTrue(bias['passed'])
+        self.assertEqual(bias['issues'], [])
+        self.assertTrue(result['passed'])
+        self.assertEqual(quality_rework_requests({**self.state, 'quality_result': result}), [])
+        detail = evaluate(self.state, original_documents=self.originals, judge=self.lineage_judge)
+        self.assertIn('출처 계보', ' '.join(detail['missing_information']))
 
-    def test_specific_lineage_issue_does_not_route_unrelated_company(self):
-        self.state['candidate_companies'].append('B')
-        self.state['technology_results']['B'] = deepcopy(self.state['technology_results']['A'])
+    def test_lineage_issue_does_not_hide_other_bias_issue(self):
         def judge(payload):
             output = self.lineage_judge(payload)
-            issue = output['checks'][2]['issues'][0]
-            issue.update(company='A', evidence_ids=payload['claims'][0]['evidence_ids'])
+            output['checks'][2]['issues'].append({
+                'claim_id': None, 'evidence_ids': [], 'suggested_owner': 'report_generator',
+                'company': None, 'reason': '위험 근거 누락', 'requested_fix': '공개된 위험을 반영하세요.'})
             return output
         result = evaluate(self.state, original_documents=self.originals, judge=judge)
-        self.assertEqual([(i['owner'], i['company']) for i in result['checks'][2]['issues']], [('technology', 'A')])
+        bias = result['checks'][2]
+        self.assertFalse(bias['passed'])
+        self.assertEqual([i['reason'].split(' (')[0] for i in bias['issues']], ['위험 근거 누락'])
 
     def test_rule_failure_does_not_hide_judge_error(self):
         self.state['final_report'] += '\nロボット100台ではなく100대 배치'
