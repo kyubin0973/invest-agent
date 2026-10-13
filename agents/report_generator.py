@@ -7,7 +7,7 @@
 구조: State → build_report_model → (재작성이면) apply_quality_feedback → render_markdown / generate_pdf_report
 - ReportModel은 문장(Statement) 단위다. 문장마다 id, 본문, 근거 source_id를 가진다.
 - PDF와 Markdown은 같은 ReportModel만 읽는다. 품질 평가가 읽는 final_report의 문장 본문이 PDF 문장과 같다.
-- Markdown의 문장은 한 줄에 하나이며 `- **라벨:** 본문 [n][m]` 형식이다. [n]은 REFERENCE 번호다.
+- Markdown의 문장은 한 줄에 하나이며 `- **라벨:** 본문 [chunk_id | source_id]` 형식이다 (품질 평가 인용 형식). PDF는 REFERENCE 번호 [n]을 쓴다.
   품질 평가의 issue.statement는 이 본문(인용 표기 제외)과 같거나 일부 문자열이면 문장을 찾을 수 있다.
 - 재작성(report_attempts > 1)에서는 owner == "report_generator"인 지적의 문장을 제외한다.
   분석 Agent 담당 지적은 Supervisor가 재작업시킨 뒤 갱신된 State로 다시 조립하면 반영된다.
@@ -189,6 +189,12 @@ def _coverage(result: dict) -> str:
     return f"{n_scored}/12 ({cov:.0%})"
 
 
+def _coverage_md(result: dict) -> str:
+    """Markdown용 커버리지. 품질 평가의 수치 인용 검사가 표의 '%'를 근거 없는 수치 주장으로 오인하지 않게 비율로 적는다."""
+    n_scored = sum(c.get("status") == "SCORED" for c in result.get("criteria", []))
+    return f"{n_scored}/12 (비율 {result.get('evidence_coverage', 0.0):.2f})"
+
+
 # ---------------------------------------------------------------------------
 # 쪽 수: 섹션은 이어서 흐르고(남은 공간이 모자랄 때만 새 쪽), 합계는 MAX_REPORT_PAGES 이내. 길면 글자 → 문장 순으로 줄인다
 # ---------------------------------------------------------------------------
@@ -254,6 +260,7 @@ class Statement:
     text: str  # 인용 표기를 뺀 문장 본문 (PDF·Markdown 동일)
     source_ids: tuple[str, ...] = ()
     kind: str = ANALYSIS
+    chunk_refs: tuple[tuple[str, str], ...] = ()  # (chunk_id, source_id) 쌍: Markdown 인용 [chunk_id | source_id]용
 
     @property
     def role(self) -> str:
@@ -287,23 +294,35 @@ def _source_ids(evidence_refs) -> tuple[str, ...]:
     return tuple(ids)
 
 
+def _chunk_refs(evidence_refs) -> tuple[tuple[str, str], ...]:
+    pairs: list[tuple[str, str]] = []
+    for ref in evidence_refs or []:
+        pair = (ref.get("chunk_id"), ref.get("source_id"))
+        if all(pair) and pair not in pairs:
+            pairs.append(pair)
+    return tuple(pairs)
+
+
 def _agent_statements(section: str, company: str, result: dict, max_findings: int, max_chars: int) -> list[Statement]:
     labels = _AGENT_LABELS[section]
     findings = (result.get("findings") or [])[:max_findings]
     # 요약은 개별 finding의 종합이므로 finding들의 출처를 합쳐서 인용한다
     summary_sources = tuple(dict.fromkeys(sid for f in findings for sid in _source_ids(f.get("evidence_refs"))))
+    summary_chunks = tuple(dict.fromkeys(p for f in findings for p in _chunk_refs(f.get("evidence_refs"))))
     has_summary = bool(result.get("summary"))
     out = [
         Statement(
             f"{section}:{company}:summary", section, company, labels["summary"],
             _short(result.get("summary") or "분석 데이터 없음", max_chars),
             summary_sources if has_summary else (), ANALYSIS if has_summary else LIMITATION,
+            summary_chunks if has_summary else (),
         )
     ]
     for i, f in enumerate(findings):
         out.append(Statement(
             f"{section}:{company}:f{i}", section, company, str(f.get("dimension") or "분석"),
             _short(f.get("statement"), max_chars), _source_ids(f.get("evidence_refs")), ANALYSIS,
+            _chunk_refs(f.get("evidence_refs")),
         ))
     out.append(Statement(
         f"{section}:{company}:risks", section, company, labels["risks"],
@@ -345,7 +364,7 @@ def build_report_model(state: InvestmentState, max_findings: int = MAX_FINDINGS,
             if text:
                 statements.append(Statement(
                     f"{COMPETITION_SECTION}:{i}:{c}", COMPETITION_SECTION, c, str(item.get("dimension") or ""),
-                    _short(text, max_chars), sources, ANALYSIS,
+                    _short(text, max_chars), sources, ANALYSIS, _chunk_refs(item.get("evidence_refs")),
                 ))
     return ReportModel(companies, tuple(statements))
 
@@ -353,7 +372,8 @@ def build_report_model(state: InvestmentState, max_findings: int = MAX_FINDINGS,
 # ---------------------------------------------------------------------------
 # 재작성: 품질 평가 지적 반영 (Report Generator 담당 지적만)
 # ---------------------------------------------------------------------------
-_CITE_MARK = re.compile(r"\s*\[\d+(?:\s*,\s*\d+)*\]")
+# 지울 인용 표기: PDF의 [3], [3, 4]와 Markdown의 [chunk_id | source_id]
+_CITE_MARK = re.compile(r"\s*(?:\[\d+(?:\s*,\s*\d+)*\]|\[[A-Za-z0-9_.:-]+\s*\|\s*[A-Za-z0-9_.:-]+\])")
 
 
 def _normalize(text) -> str:
@@ -409,8 +429,8 @@ def _cite_html(stmt: Statement, ref_index: dict[str, int]) -> str:
 
 
 def _cite_md(stmt: Statement, ref_index: dict[str, int]) -> str:
-    nums = _citations(stmt, ref_index)
-    return " " + "".join(f"[{n}]" for n in nums) if nums else ""
+    """Markdown(final_report)은 품질 평가가 읽는 [chunk_id | source_id] 형식으로 인용한다. 번호는 PDF에서만 쓴다."""
+    return "".join(f" [{chunk} | {source}]" for chunk, source in stmt.chunk_refs if source in ref_index)
 
 
 def _md_reference(ref: ReferenceItem) -> str:
@@ -439,7 +459,7 @@ def render_markdown(model: ReportModel, state: InvestmentState, references: list
               "| Target Company | Decision | Final Score | Coverage |", "|---|---|---|---|"]
     for c in companies:
         r = results.get(c) or {}
-        lines.append(f"| {c} | {r.get('decision', 'HOLD')} | {_fmt(r.get('final_score'))} / 5.0 | {_coverage(r)} |")
+        lines.append(f"| {c} | {r.get('decision', 'HOLD')} | {_fmt(r.get('final_score'))} / 5.0 | {_coverage_md(r)} |")
     lines += ["", "### 1.1 판정 요약 (판정은 Python 규칙으로 계산한 결과)", ""]
     for c in companies:
         stmts = model.of(SUMMARY_SECTION, c)
@@ -450,7 +470,7 @@ def render_markdown(model: ReportModel, state: InvestmentState, references: list
         lines += [f"> 품질 평가 지적에 따라 서술 {len(model.omitted)}건을 제외했습니다.", ""]
 
     lines += ["## 2. 평가 개요", ""]
-    lines += [f"- **{label}:** {text}" for label, text in _method_rows()]
+    lines += [f"- **{label}:** {text}" for label, text in _method_rows(plain=True)]
     lines.append("")
 
     for title, section in (("## 3. 기술·제품 분석 (Technology & Product)", TECH_SECTION), ("## 4. 시장·고객 분석 (Market & Traction)", MARKET_SECTION)):
@@ -478,7 +498,7 @@ def render_markdown(model: ReportModel, state: InvestmentState, references: list
             row.append(_fmt(item.get("score")) if item else "N/A")
         lines.append("| " + " | ".join(row) + " |")
     lines.append("| - | Final Score | " + " | ".join(_fmt((results.get(c) or {}).get("final_score")) for c in companies) + " |")
-    lines.append("| - | Evidence Coverage | " + " | ".join(_coverage(results.get(c) or {}) for c in companies) + " |")
+    lines.append("| - | Evidence Coverage | " + " | ".join(_coverage_md(results.get(c) or {}) for c in companies) + " |")
     lines.append("| - | Final Decision | " + " | ".join(str((results.get(c) or {}).get("decision", "N/A")) for c in companies) + " |")
     lines.append("")
 
@@ -629,13 +649,22 @@ def _conclusion_text(companies: list[str], results: dict) -> str:
     return text
 
 
-def _method_rows() -> list[tuple[str, str]]:
-    """평가 방법과 판정 기준. 임계값은 evaluation.criteria의 값을 그대로 쓴다 (문서와 코드가 어긋나지 않게)."""
+def _method_rows(plain: bool = False) -> list[tuple[str, str]]:
+    """평가 방법과 판정 기준. 임계값은 evaluation.criteria의 값을 그대로 쓴다 (문서와 코드가 어긋나지 않게).
+
+    plain=True(Markdown)는 '9개'처럼 수치+단위 표기를 피한다: 품질 평가의 결정적 검사가 인용 없는 수치 주장으로 오인한다.
+    """
+    judgement = (
+        f"평가 가능 문항 최소 {MIN_SCORED_CRITERIA}, Final Score 최소 {INVEST_SCORE_THRESHOLD:.1f}이면 INVEST, "
+        f"평가 가능 문항이 최소 기준에 못 미치면 HOLD INSUFFICIENT EVIDENCE, 그 외 HOLD. LLM이 아닌 Python 규칙으로 계산합니다."
+        if plain else
+        f"평가 가능 문항 {MIN_SCORED_CRITERIA}개 이상이고 Final Score {INVEST_SCORE_THRESHOLD:.1f} 이상이면 INVEST, "
+        f"문항 수가 부족하면 HOLD INSUFFICIENT EVIDENCE, 그 외 HOLD. LLM이 아닌 Python 규칙으로 계산합니다."
+    )
     return [
         ("평가 프레임", f"Bessemer Checklist 10문항 + 휴머노이드 특화 2문항, 총 {len(CRITERIA)}문항 (문항별 가중치 없음)"),
         ("점수 척도", "1·3·5점, 근거가 부족하면 N/A. 5점은 외부 검증 근거(E3 이상)가 필요하며 N/A는 부정 근거로 보지 않습니다."),
-        ("판정 기준", f"평가 가능 문항 {MIN_SCORED_CRITERIA}개 이상이고 Final Score {INVEST_SCORE_THRESHOLD:.1f} 이상이면 INVEST, "
-                  f"문항 수가 부족하면 HOLD INSUFFICIENT EVIDENCE, 그 외 HOLD. LLM이 아닌 Python 규칙으로 계산합니다."),
+        ("판정 기준", judgement),
         ("근거 규칙", "기업 주장은 달성 성과가 아니고, Demo는 상용 배치가 아니며, 근거 없음은 부정 근거가 아닙니다."),
     ]
 

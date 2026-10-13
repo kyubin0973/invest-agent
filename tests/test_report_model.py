@@ -83,8 +83,8 @@ class ReportModelTest(unittest.TestCase):
         self.assertNotEqual(md.strip(), "# Markdown Report Generated")
         index = {r["source_id"]: i for i, r in enumerate(refs, 1)}
         line = next(l for l in md.splitlines() if "T-Alpha 근거가 있는 제품 서술입니다" in l)
-        self.assertTrue(line.endswith(f"[{index['T-Alpha']}]"))
-        self.assertIn(f"[{index['T-Alpha']}] ", md.split("## 부록. 참고문헌 (REFERENCE)")[1])
+        self.assertTrue(line.endswith("[T-Alpha-c1 | T-Alpha]"))  # 품질 평가가 읽는 인용 형식
+        self.assertIn(f"[{index['T-Alpha']}] ", md.split("## 부록. 참고문헌 (REFERENCE)")[1])  # REFERENCE 번호
 
     def test_issue_statement_from_markdown_line_matches(self):
         """품질 평가가 final_report에서 문장을 복사해 지적하면(인용 표기 포함) 문장을 찾는다."""
@@ -96,6 +96,30 @@ class ReportModelTest(unittest.TestCase):
         model, unmatched = apply_quality_feedback(build_report_model(s), quality(copied))
         self.assertEqual(unmatched, [])
         self.assertEqual(model.omitted, {"technology:Alpha:f1": "neutrality"})
+
+
+try:
+    from agents.quality_evaluator import evaluate_report
+    from tests.qa_fixtures import passing_judge
+except ImportError:  # 품질 평가 코드가 아직 없는 브랜치
+    evaluate_report = None
+
+
+@unittest.skipIf(evaluate_report is None, "품질 평가(feat/qa) 코드가 없는 브랜치")
+class QualityContractTest(unittest.TestCase):
+    def test_report_passes_deterministic_quality_rules(self):
+        """실제 품질 평가의 결정적 검사(인용 형식·REFERENCE·수치 인용)가 보고서에서 막히지 않는다 (Judge는 통과 응답 주입)."""
+        s = state()
+        s["competition_result"]["comparisons"][0]["evidence_refs"] = [{"chunk_id": "T-Alpha-c1", "source_id": "T-Alpha"}]
+        s["final_report"] = report_generator_node(s)["final_report"]
+        s["references"] = collect_references(s)
+        originals = {e["chunk_id"]: {"source_id": e["source_id"], "chunk_id": e["chunk_id"], "page": e["page"], "text": "원문"}
+                     for key in ("technology_results", "market_traction_results")
+                     for a in s[key].values() for e in a["evidence"]}
+        result = evaluate_report(s, original_documents=originals, judge=passing_judge)
+        self.assertTrue(result["judge_used"], [i["reason"] for c in result["checks"] for i in c["issues"]])
+        groundedness = next(c for c in result["checks"] if c["item"] == "groundedness")
+        self.assertTrue(groundedness["passed"], groundedness["issues"])
 
 
 class RewriteTest(unittest.TestCase):
