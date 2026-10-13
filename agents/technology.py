@@ -132,28 +132,69 @@ def _normalize_quote(text: str) -> str:
     return " ".join(text.split())
 
 
-_LIGATURE_MARK = "\ufffd"
-_LIGATURES = re.compile(r"ffi|ffl|ff|fi|fl")
+_BROKEN = "\ufffd"  # 원문에서 합자가 깨진 자리 표시 (제어문자 제거 전에 보존)
+_LIGATURES = ("ffi", "ffl", "ff", "fi", "fl")
 
 
-def _ligature_key(text: str) -> str:
-    """PDF 추출에서 fi/fl 합자가 NUL(\\x00)로 깨진 자리를 원문·인용 양쪽에서 같은 표시로 맞춘다."""
-    return _LIGATURES.sub(_LIGATURE_MARK, _normalize_quote(text.replace("\x00", _LIGATURE_MARK)))
+def _ends_at_boundary(text: str, end: int) -> bool:
+    """일치가 끝난 다음 글자가 단어·숫자의 일부가 아닌지 (깨진 합자 자리도 단어의 일부로 본다)."""
+    return end >= len(text) or not (text[end].isalnum() or text[end] == _BROKEN)
+
+
+def _match_from(source: str, i: int, quote: str, j: int, bounded: bool = False) -> bool:
+    """source[i:]가 quote[j:]로 시작하는지. 원문의 깨진 자리에서만 합자 글자열을 대응시킨다.
+
+    bounded=True면 일치가 끝난 위치가 단어·숫자 중간이 아니어야 한다 (끝 마침표를 뗀 후보용).
+    """
+    while j < len(quote):
+        if i >= len(source):
+            return False
+        if source[i] == _BROKEN:
+            return any(quote.startswith(lig, j) and _match_from(source, i + 1, quote, j + len(lig), bounded)
+                       for lig in _LIGATURES)
+        if source[i] != quote[j]:
+            return False
+        i, j = i + 1, j + 1
+    return not bounded or _ends_at_boundary(source, i)
+
+
+def _found(text: str, candidate: str, bounded: bool) -> bool:
+    """candidate가 text의 연속 구절인지. bounded=True면 끝 위치가 단어·숫자 중간인 일치는 제외한다."""
+    start = text.find(candidate)
+    while start >= 0:
+        if not bounded or _ends_at_boundary(text, start + len(candidate)):
+            return True
+        start = text.find(candidate, start + 1)
+    return False
 
 
 def _quote_in_source(quote: str, source: str) -> bool:
     """인용문이 원문의 연속 구절인지 대조한다.
 
     1) 공백·문장부호 모양·제어문자만 정규화해 비교한다 (기존 규칙).
-    2) 원문의 깨진 합자(예: "speci\\x00c")는 인용의 fi/fl/ff(예: "specific")와 같은 것으로 본다.
-       합자 외의 빠진 글자는 복원하지 않는다. 등급·범위 판정 정규식에는 쓰지 않는다.
+    2) PDF 추출에서 fi/fl 합자가 NUL(\\x00)로 깨진 경우, 원문의 그 자리에서만 인용의 fi/fl/ff를 허용한다
+       (예: 원문 "speci\\x00c" ↔ 인용 "specific"). 다른 위치의 글자는 그대로 비교하므로
+       단어가 바뀐 인용(예: 원문 "file" ↔ 인용 "flle")은 거부된다. 합자가 아닌 빠진 글자는 복원하지 않는다.
+    3) 인용 맨 끝의 마침표 한 개 차이만 허용한다 (예: 제목 "… Operations" ↔ 인용 "… Operations.").
+       이때 일치가 끝난 위치가 단어·숫자 중간이면 거부한다 (합자 복구 경로도 동일).
     """
     normalized = _normalize_quote(quote)
     if not normalized:
         return False
-    return normalized in _normalize_quote(source) or (
-        "\x00" in source and _ligature_key(quote) in _ligature_key(source)
-    )
+    candidates = [(normalized, False)]
+    if normalized.endswith(".") and normalized[:-1].strip():
+        # 3) 원문 제목처럼 마침표가 없는 구절에 LLM이 붙인 맨 끝 마침표 한 개만 허용한다.
+        #    단, 마침표를 뗀 후보는 원문에서 단어·숫자가 끝나는 자리와 일치해야 한다
+        #    (원문 "completed 100 tasks" ↔ 인용 "completed 10." 같은 숫자·단어 자르기 거부).
+        candidates.append((normalized[:-1], True))
+    plain = _normalize_quote(source)
+    if any(_found(plain, c, bounded) for c, bounded in candidates):
+        return True
+    if "\x00" not in source:
+        return False
+    marked = _normalize_quote(source.replace("\x00", _BROKEN))
+    return any(_match_from(marked, i, c, 0, bounded) for c, bounded in candidates
+               for i in range(len(marked)) if marked[i] in (c[0], _BROKEN))
 
 
 def _matches(pattern: str, text: str) -> bool:
@@ -172,8 +213,39 @@ def _confirmed_sentences(text: str) -> str:
     )
 
 
+# 미래 계획·검증 예정 표현. 이런 문장만으로는 자율 수행·반복 안정성 실적을 뒷받침할 수 없다.
+_PLAN = (r"\b(will|would|aim\w*|plan\w*|goal\w*|upcoming|in the future|future plans?|intend\w*|expect\w*|going to|designed to)\b|"
+         r"\bannounced\b.{0,60}\b(pilot|collaboration|partnership|agreement)\b|"  # 협력·파일럿 발표 = 계획 단계
+         r"\bcollaborat\w*\s+to\s+(scale|build|deploy)\b|"  # 협력의 목적 = 달성 아님
+         r"계획|목표|예정|향후")
+_ANNOUNCED = r"\bannounced\b.{0,60}\b(pilot|collaboration|partnership|agreement)\b"
+# 진행·달성으로 서술한 표현 (발표 사실만 옮긴 문장과 구분)
+_IN_PROGRESS = r"하고 있|진행 중|운영 중|양산 중|완료|달성|검증했|확보했|가동"
+PERFORMANCE_QUESTIONS = ("autonomy", "reliability")  # H11 기술 성숙도: 실제 수행 실적이 필요한 질문
+
+
+_PLAN_WORDING = r"계획|예정|목표|향후|할 것|하기로|추진|준비|plan|will"
+
+
+def _plan_as_achievement(statement: str, quotes: list[str]) -> bool:
+    """인용이 모두 미래 계획인데 문장은 계획임을 밝히지 않고 사실처럼 서술했는가 (등급과 무관하게 거부).
+
+    협력·파일럿 '발표' 인용을 "발표했다"로 정확히 옮긴 문장은 허용한다. 단 "확대하고 있다"처럼
+    진행·달성으로 서술하면 거부한다.
+    """
+    if not quotes or not all(_plan_only(q) for q in quotes) or _matches(_PLAN_WORDING, statement):
+        return False
+    announced = all(_matches(_ANNOUNCED, _normalize_quote(q)) for q in quotes)
+    return not (announced and _matches("발표", statement) and not _matches(_IN_PROGRESS, statement))
+
+
+def _plan_only(text: str) -> bool:
+    sentences = [s for s in re.split(r"(?<=[.!?])\s+", _normalize_quote(text)) if s.strip()]
+    return bool(sentences) and all(_matches(_PLAN, s) for s in sentences)
+
+
 _DEMO = r"\b(demonstrated|tested|prototype|performed a .{0,30}test|controlled test)\b|시연했|시험했|테스트했|시제품"
-_CURRENT = r"\b(uses?|utilizes?|incorporated|integrated|addressed|provides?|demonstrated|tested|operated)\b|적용되어|사용하고|확인했다"
+_CURRENT = r"\b(uses?|utilizes?|incorporated|integrated|addressed|provides?|demonstrated|tested|operated|outfitted|equipped)\b|적용되어|사용하고|확인했다"
 _OPERATION = r"\b(operated|deployed|in operation|signed .{0,40}contract)\b|실제 운영했|가동 중|계약을 체결"
 _REPEATED = r"\b(repeatedly|daily|every shift|at scale|fleet of)\b|매일|반복 운영|규모화"
 _COMPONENT = r"\b(components?|parts?|motor.control|technology|technologies|microcontrollers?|gate drivers?)\b|부품|기술|모터|구동"
@@ -207,11 +279,8 @@ def _scope_error(statement: str, quote: str) -> str | None:
     return None
 
 
-def _level_shortfall(item: EvidenceDraft, source_type: str) -> str | None:
-    """LLM이 붙인 등급의 조건이 인용문으로 확인되지 않으면 그 이유를 돌려준다.
-
-    조건을 못 갖춘 근거는 버리지 않고 가장 낮은 E1(주장·계획)로만 낮춘다 (_assemble). 승급은 하지 않는다.
-    """
+def _level_error(item: EvidenceDraft, source_type: str) -> str | None:
+    """허용 근거가 명시되지 않은 등급은 제외한다. 자동 승급/강등하지 않는다."""
     level = item.evidence_level
     confirmed = _confirmed_sentences(item.supporting_quote)
     if source_type == "company" and level not in ("E1", "E2"):
@@ -224,7 +293,7 @@ def _level_shortfall(item: EvidenceDraft, source_type: str) -> str | None:
         required = _CURRENT if level == "E3" else _OPERATION
         if not _matches(required, confirmed) or (level == "E5" and not _matches(_REPEATED, confirmed)):
             return f"{level}에 필요한 현재 사실·운영·반복 확인 근거 없음"
-    return None
+    return _scope_error(item.fact, item.supporting_quote)
 
 
 def _search(company: str, queries: list[str], scope: dict | None, k: int = TOP_K) -> list[Document]:
@@ -232,7 +301,9 @@ def _search(company: str, queries: list[str], scope: dict | None, k: int = TOP_K
     docs = {}
     key = company_key(company)
     for query in _unique(queries):
-        for doc in search_technology(f"{company} {query}", company, k=k):
+        # 기업 범위는 search_technology의 company 필터가 보장한다. 질의 앞에 기업명을 붙이면
+        # 기업명이 반복되는 홍보성 청크(A4·A2)가 위로 올라 제3자 기술 자료(A3)가 밀려났다 (진단: top5 1/18 → 14/18).
+        for doc in search_technology(query, company, k=k):
             m = doc.metadata
             if m.get("company") != key or m.get("domain") != "technology":
                 continue
@@ -306,9 +377,15 @@ def _review(
     return checked
 
 
+_E2_LIMIT = "제한 시연 근거: 실환경 반복 운영·외부 검증은 미확인"
+
+
 def _render_statement(statement: str, refs: list[dict], evidence: dict[str, dict]) -> str:
     if any(evidence[ref["chunk_id"]]["source_type"] == "company" for ref in refs):
         statement = f"기업 자체 발표 포함(외부 확인과 구분): {statement}"
+    levels = {evidence[ref["chunk_id"]].get("evidence_level") for ref in refs}
+    if "E2" in levels and not levels & {"E3", "E4", "E5"}:
+        statement = f"{statement} ({_E2_LIMIT})"
     citations = " ".join(f"[{ref['chunk_id']} | {ref['source_id']}]" for ref in refs)
     return f"{statement} {citations}"
 
@@ -334,22 +411,20 @@ def _assemble(
             reason = "동일 청크의 근거 분석이 중복됨"
         elif not _quote_in_source(item.supporting_quote, originals[item.chunk_id].page_content):
             reason = "뒷받침 인용문이 원문에 없음"
+        elif _plan_as_achievement(item.fact, [item.supporting_quote]):
+            reason = "미래 계획 인용을 달성 사실로 서술함"
         else:
-            reason = _scope_error(item.fact, item.supporting_quote)
+            reason = _level_error(item, available[item.chunk_id]["source_type"])
         if reason:
             missing.append(f"근거 검증 실패({item.chunk_id}): {reason}")
             continue
-        level = item.evidence_level
-        shortfall = _level_shortfall(item, available[item.chunk_id]["source_type"])
-        if shortfall:
-            # 상위 등급 조건이 확인되지 않으면 버리지 않고 E1(주장·계획 수준)로 낮춰 보존한다.
-            missing.append(f"근거 수준 하향({item.chunk_id}): {level}→E1, {shortfall}")
-            level = "E1"
         fact = item.fact
         if available[item.chunk_id]["source_type"] == "company":
             fact = f"{company} 자체 발표에 따르면: {fact}"
+        if item.evidence_level == "E2" and _E2_LIMIT not in fact:
+            fact = f"{fact} ({_E2_LIMIT})"
         evidence[item.chunk_id] = {
-            **available[item.chunk_id], "fact": fact, "evidence_level": level,
+            **available[item.chunk_id], "fact": fact, "evidence_level": item.evidence_level,
         }
 
     # 참조의 존재 여부와 LLM의 별도 근거 분석 누락은 구분한다.
@@ -365,7 +440,7 @@ def _assemble(
     covered_questions = set()
     targets = {q.id for q in questions}
 
-    def validate_findings(items: list[FindingDraft]) -> list[dict]:
+    def validate_findings(items: list[FindingDraft], *, is_risk: bool = False) -> list[dict]:
         findings = []
         for item in items:
             if item.question_id not in QUESTIONS_BY_ID:
@@ -382,9 +457,20 @@ def _assemble(
                      originals[ref.chunk_id].page_content)
                 for ref in item.evidence_refs
             )
-            scope_error = _scope_error(item.statement, quotes)
+            ref_quotes = [
+                next((e.supporting_quote for e in draft.evidence if e.chunk_id == ref.chunk_id),
+                     originals[ref.chunk_id].page_content)
+                for ref in item.evidence_refs
+            ]
+            scope_error = _scope_error(item.statement, quotes) or (
+                "미래 계획 인용을 달성 사실로 서술함" if _plan_as_achievement(item.statement, ref_quotes) else None
+            )
             if scope_error:
                 missing.append(f"{QUESTIONS_BY_ID[item.question_id].dimension}: {scope_error}")
+                continue
+            if not is_risk and item.question_id in PERFORMANCE_QUESTIONS and all(_plan_only(q) for q in ref_quotes):
+                missing.append(f"{QUESTIONS_BY_ID[item.question_id].dimension}: "
+                               "미래 계획·검증 예정 근거만 있어 실제 수행 실적으로 사용하지 않음")
                 continue
             refs = list({(r.chunk_id, r.source_id): r.model_dump() for r in item.evidence_refs}.values())
             used_ids.update(ref["chunk_id"] for ref in refs)
@@ -397,7 +483,7 @@ def _assemble(
         return findings
 
     findings = validate_findings(draft.findings)
-    risks = validate_findings(draft.risks)
+    risks = validate_findings(draft.risks, is_risk=True)
     for question in questions:
         if question.id not in covered_questions:
             missing.append(f"{question.dimension}: 검증된 분석 결과 없음")
@@ -416,11 +502,13 @@ def _assemble(
 def _analyze(
     company: str, scope: dict | None, questions: tuple[TechnologyQuestion, ...] = QUESTIONS, *,
     queries: list[str] | None = None, k: int = TOP_K, rework_note: str = "", run_prefix: str = "technology",
+    reviews_out: list | None = None,
 ) -> AnalysisResult:
     """하위 질문별 검색 → 충분성 점검 → 부족 질문만 1회 보완 → 구조화 분석 → Python 근거 검증."""
     docs = _search(company, queries or [q.query for q in questions], scope, k=k)
     reviews = _review(company, docs, can_retry=True, questions=questions,
                       rework_note=rework_note, run_name=f"{run_prefix}_review")
+    first_reviews = reviews
     retries = [r.retry_query for r in reviews if not r.sufficient]
     if retries:
         extra = _search(company, retries, scope, k=k)
@@ -429,11 +517,15 @@ def _analyze(
         reviews = _review(company, docs, can_retry=False, questions=questions,
                           rework_note=rework_note, run_name=f"{run_prefix}_review_final")
 
+    if reviews_out is not None:
+        reviews_out.extend(reviews)
     missing = [
         f"{QUESTIONS_BY_ID[r.question_id].dimension}: {message}"
         for r in reviews if not r.sufficient for message in r.missing_information
     ]
-    relevant_ids = {ref.chunk_id for r in reviews for ref in r.relevant_refs}
+    # 충분성·부족 정보는 최종 점검 기준이지만, 1차 점검에서 관련 있다고 고른 청크도 분석에 넘긴다.
+    # (진단: 1차에서 고른 A3가 보완 검색 뒤 2차 점검에서 빠져 분석에 도달하지 못했다)
+    relevant_ids = {ref.chunk_id for r in [*first_reviews, *reviews] for ref in r.relevant_refs}
     relevant_docs = [d for d in docs if d.metadata["chunk_id"] in relevant_ids]
     if relevant_docs:
         raw = get_structured_llm(TechnologyAnalysis).invoke(
@@ -568,11 +660,15 @@ def _rework(
     )
     # 최초 질의(넓힌 Top-K)로 기존 근거를 다시 대조하고, 다른 관점 질의로 새 근거를 찾는다.
     queries = [query for q in questions for query in (q.rework_query, q.query) if query]
+    reviews: list[QuestionReview] = []
     fresh = _analyze(company, scope, questions, queries=queries, k=REWORK_K,
-                     rework_note=note, run_prefix="technology_rework")
+                     rework_note=note, run_prefix="technology_rework", reviews_out=reviews)
     result = _merge(previous, fresh, questions, flagged, company)
 
-    covered = {f["dimension"] for f in result["findings"]}
+    # 해결 = 재작업 점검에서 충분 판정 + 새로 검증된 finding. finding만 생긴 것은 부분(partial)으로만 센다.
+    # 계획만 있는 autonomy·reliability finding은 _assemble에서 이미 제외된다.
+    sufficient = {r.question_id for r in reviews if r.sufficient}
+    fresh_dims = {f["dimension"] for f in fresh["findings"]}
     outcome = {
         "trace_id": trace_id,
         "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -581,17 +677,18 @@ def _rework(
         "unmapped_criterion_ids": unmapped,
         "feedback_count": len(request.get("feedback") or []),
         "questions": [q.id for q in questions],
-        "resolved": [q.id for q in questions if q.dimension in covered],
-        "unresolved": [q.id for q in questions if q.dimension not in covered],
+        "resolved": [q.id for q in questions if q.id in sufficient and q.dimension in fresh_dims],
+        "partial": [q.id for q in questions if q.id not in sufficient and q.dimension in fresh_dims],
+        "unresolved": [q.id for q in questions if q.dimension not in fresh_dims],
         "removed_statements": len(flagged),
         "evidence_before": len(previous.get("evidence", [])),
         "evidence_after": len(result["evidence"]),
     }
     logger.info(
-        "%s [%s] technology rework company=%s criteria=%s questions=%s resolved=%s unresolved=%s "
+        "%s [%s] technology rework company=%s criteria=%s questions=%s resolved=%s partial=%s unresolved=%s "
         "removed=%d evidence=%d→%d",
         outcome["ts"], trace_id, company, outcome["criterion_ids"] or "-", outcome["questions"],
-        outcome["resolved"] or "-", outcome["unresolved"] or "-", outcome["removed_statements"],
+        outcome["resolved"] or "-", outcome["partial"] or "-", outcome["unresolved"] or "-", outcome["removed_statements"],
         outcome["evidence_before"], outcome["evidence_after"],
     )
     return result

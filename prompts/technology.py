@@ -97,8 +97,16 @@ TECHNOLOGY_RULES = """[Technology 역할과 근거 처리]
   예: TI가 Apollo에 TI motor-control 기술이 현재 적용됐다고 확인하면 그 기술 적용 사실은 E3 가능하다.
   단, partner라는 이유만으로 E3를 주지 않으며 장기 신뢰성·반복 성공률·상용 운영 성능·미래 개선까지
   확인된 것으로 확대하지 않는다. 미래 개선은 계획으로 표현하고 해당 주장에는 E1을 적용한다.
-- Python은 supporting_quote로 조건이 확인되지 않는 E2~E5를 E1(주장·계획 수준)로 낮춘다. 등급을 올리지는 않는다.
-  처음부터 인용문이 직접 확인하는 수준으로 표시하라.
+- Python은 supporting_quote에 실제 시연·시험 근거가 없는 E2를 제외한다. 등급을 자동 교정하지 않는다.
+- 한 문장에 현재 사실과 미래 계획·가능성(will, can, aim, plan 등)이 섞여 있으면 supporting_quote는
+  현재 사실을 담은 연속 구절만 고른다. 계획·가능성은 달성 성과가 아니므로 E1로 표시하고 fact에 계획·가능성임을 쓴다.
+  예: "Apollo utilizes Apptronik's custom linear and rotary actuators, which will be improved by TI's ..."
+  → 현재 적용 사실은 "Apollo utilizes Apptronik's custom linear and rotary actuators"만 인용한다.
+- 미래 제조·검증 계획(예: 향후 공장 환경에서 검증 테스트 예정)은 autonomy·reliability의 실제 수행 실적으로 쓰지 않는다.
+- 협력·파일럿·계약 '발표'는 계획 단계다. fact와 finding에 계획·추진·예정임을 밝히고, 생산 확대·운영 중으로 쓰지 않는다.
+  Python은 계획 표현만 있는 근거에 기댄 autonomy·reliability finding을 제외한다.
+- E2(제한 시연) 근거의 fact와 finding에는 인용문에서 확인되는 시연 조건(환경·과제·사람 개입 등)과
+  한계(실환경 반복 운영·외부 검증 미확인)를 함께 쓴다. 시연을 상용 운영이나 반복 성과로 확대하지 않는다.
   외부 출처의 현재 기술 적용 사실은 E3로 분류하되, 인용문도 그 현재 사실을 직접 확인해야 한다.
   예: TI 원문의 "Apptronik incorporated TI’s motor-control technologies"는 기술 적용 사실(E3)이다.
   E4는 실제 운영·계약, E5는 실제 운영과 반복·규모화가 인용문에 모두 확인되어야 한다.
@@ -210,6 +218,8 @@ def build_rework_note(
     lines += [
         "재작업 규칙:",
         "- 위 질문만 다시 점검하고, 이전에 부족했던 정보를 메울 원문 근거를 우선 찾는다.",
+        "- 부족분을 완전히 메우지 못해도 질문과 직접 관련된 원문(제3자 연구·시연 자료 포함)은 relevant_refs에 넣고,",
+        "  sufficient는 false로 두며 남은 부족분을 missing_information에 쓴다. 관련 근거를 비워 두지 않는다.",
         "- 지적된 문장과 같은 주장을 반복하지 말고, 원문이 직접 뒷받침하는 범위로만 다시 쓴다.",
         "- 새 근거를 찾지 못하면 추측으로 채우지 말고 missing_information에 그대로 남긴다.",
         "- 재작업이라는 이유로 evidence_level을 올리거나 계획을 달성 성과로 바꾸지 않는다.",
