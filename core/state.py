@@ -1,13 +1,16 @@
-"""LangGraph State Schema (설계 산출물 4.1 State 설계, 4.1.1 중첩 Schema)
+"""LangGraph State Schema (Supervisor 패턴)
 
-State는 Agent 분석 결과와 Graph 제어정보를 함께 관리한다.
-병렬 Agent는 서로 다른 결과 Key에 기록하며, 평가 문항의 Score·Evidence·Confidence·N/A는
-investment_results 내부에서 일관되게 관리한다.
+State는 "작업 페이로드"와 "제어 메타데이터"를 구분해 관리한다.
+- 작업 페이로드: Agent 분석 결과. 기업명을 Key로 하는 dict에 덮어쓰므로 재작업해도 늘어나지 않는다.
+- 제어 메타데이터: Supervisor가 라우팅·종료·재개를 판단하는 데 필요한 최소 값만 둔다.
+- 결정 로그(라우팅 사유 등)는 State에 쌓지 않고 logger·LangSmith로 보내며, trace_id로 State와 잇는다.
+평가 문항의 Score·Evidence·Confidence·N/A는 investment_results 내부에서 일관되게 관리한다.
 
 데이터 흐름: Document/Chunk → EvidenceItem → AnalysisResult → Competition/Judge → InvestmentResult
 → Report Statement/Reference. Agent 간에는 원문 전체가 아니라 구조화 결과와 검증된 Evidence 참조를 전달한다.
 """
 
+import operator
 from typing import Annotated, Literal, TypedDict
 
 # ---------------------------------------------------------------------------
@@ -19,9 +22,20 @@ CompetitionCriterion = Literal["B04", "B09"]
 CriterionStatus = Literal["SCORED", "INSUFFICIENT_EVIDENCE"]
 Decision = Literal["INVEST", "HOLD", "HOLD_INSUFFICIENT_EVIDENCE"]
 
-AnalysisRoute = Literal["NEXT_CANDIDATE", "COMPETITION"]
-EvaluationRoute = Literal["NEXT_CANDIDATE", "FINAL_DECISION"]
 FinalRoute = Literal["INVEST_FOUND", "NO_INVEST"]
+
+# Supervisor가 부를 수 있는 하위 Agent와 종료 신호
+Worker = Literal[
+    "technology", "market_traction", "competition", "investment_judge", "report_generator", "quality_evaluator"
+]
+NextStep = Literal[
+    "technology", "market_traction", "competition", "investment_judge", "report_generator", "quality_evaluator",
+    "FINISH",
+]
+AnalysisAgent = Literal["technology", "market_traction"]
+RunStatus = Literal["RUNNING", "SUCCESS", "FAILED"]
+NodeStatus = Literal["DONE", "FAILED"]
+QualityItem = Literal["groundedness", "neutrality", "bias_control"]
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +157,34 @@ class ReferenceItem(TypedDict):
     pages: list[int]  # 실제 사용한 원본 페이지
 
 
+class ReworkRequest(TypedDict):
+    """Supervisor가 근거 부족으로 판단해 분석 Agent에 보내는 재작업 요청."""
+
+    company: str
+    agent: AnalysisAgent
+    criterion_ids: list[str]  # 근거가 부족한 평가 문항 (B01~B10, H11~H12)
+    reason: str
+
+
+class QualityCheck(TypedDict):
+    item: QualityItem
+    passed: bool
+    issues: list[str]  # 미달 사유 (통과하면 빈 목록)
+
+
+class QualityResult(TypedDict):
+    passed: bool  # 모든 항목 통과 여부 (Python 규칙으로 계산)
+    checks: list[QualityCheck]
+    feedback: list[str]  # Report Generator가 재작성할 때 반영할 지시
+
+
+class ErrorItem(TypedDict):
+    node: str
+    company: str | None
+    message: str
+    ts: str  # ISO 8601
+
+
 # ---------------------------------------------------------------------------
 # Reducer
 # ---------------------------------------------------------------------------
@@ -155,33 +197,54 @@ def merge_dict(left: dict, right: dict) -> dict:
 # Graph State
 # ---------------------------------------------------------------------------
 class InvestmentState(TypedDict):
+    # ── 작업 페이로드 ─────────────────────────────────────────────
     # 후보 입력
     candidate_companies: list[str]
     company_profiles: dict[str, CompanyProfile]
 
-    # 분석·평가 Loop 위치
-    current_company: str | None
-    current_company_index: int
-
-    # 기업별 분석 결과 (기업명 → 결과)
+    # 기업별 분석 결과 (기업명 → 결과). 재작업 결과는 같은 Key를 덮어쓴다.
     technology_results: Annotated[dict[str, AnalysisResult], merge_dict]
     market_traction_results: Annotated[dict[str, AnalysisResult], merge_dict]
 
-    # 병렬 분석 완료 (동일 기업의 Fan-in 보장)
-    technology_done: bool
-    market_traction_done: bool
-    analysis_join_ready: bool
-    analysis_route: AnalysisRoute | None
-
-    # 전체 후보 비교 (1회)
+    # 전체 후보 비교
     competition_result: CompetitionResult | None
 
-    # 투자 평가 Loop
+    # 투자 평가 (기업명 → 결과)
     investment_results: Annotated[dict[str, InvestmentResult], merge_dict]
-    completed_companies: list[str]
-    evaluation_route: EvaluationRoute | None
-    final_route: FinalRoute | None
 
-    # 최종 산출물
+    # 최종 산출물. PDF 본문은 파일로 저장하고 State에는 경로만 둔다.
     references: list[ReferenceItem]
     final_report: str | None
+    report_path: str | None
+    quality_result: QualityResult | None  # 보고서 품질 평가 결과 (미달 시 재작성 지시 포함)
+
+    # ── 제어 메타데이터 (라우팅·종료·재개에 필요한 최소 값) ───────────
+    trace_id: str  # 외부 로그·LangSmith Trace와 잇는 상관 키
+    status: RunStatus
+
+    # 라우팅: Supervisor만 쓰고, Gate 함수와 하위 Agent가 읽는다.
+    next: NextStep | None  # 다음에 실행할 하위 Agent 또는 FINISH
+    current_company: str | None  # 기업 단위 Agent(Technology, Market, Judge)의 작업 대상
+    rework_request: ReworkRequest | None  # 재작업일 때만 값이 있다 (첫 분석은 None)
+
+    # Supervisor의 작업 추적
+    pending_judge: list[str]  # 평가(재평가)가 필요한 기업
+    competition_stale: bool  # 재작업으로 분석이 바뀌어 비교를 다시 해야 하는지
+    rework_counts: dict[str, int]  # "기업:agent" → 재작업 횟수 (상한 관리)
+    report_attempts: int  # 보고서 작성 횟수 (상한 관리)
+    report_evaluated: bool  # 마지막으로 작성한 보고서의 품질 평가를 요청했는지
+
+    # 종료 보장
+    step_count: int  # Supervisor가 하위 Agent를 부른 횟수
+    max_steps: int
+
+    # 재개·복구: 노드별 마지막 상태와 오류. 오류는 실패할 때만 한 건씩 추가된다.
+    node_status: Annotated[dict[str, NodeStatus], merge_dict]  # "node" 또는 "node:기업" → 상태
+    errors: Annotated[list[ErrorItem], operator.add]
+    last_error: str | None
+
+    # ── 기존 Agent가 반환하는 완료 표시 (호환용, 라우팅에는 쓰지 않는다) ──
+    technology_done: bool
+    market_traction_done: bool
+    completed_companies: list[str]
+    final_route: FinalRoute | None

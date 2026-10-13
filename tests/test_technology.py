@@ -443,9 +443,11 @@ class TechnologyNodeTests(unittest.TestCase):
 
 
 class TechnologyGraphTests(unittest.TestCase):
-    def test_real_graph_keeps_two_company_results_and_parallel_market_results(self):
-        from core.graph import build_graph, recursion_limit
+    def test_real_graph_keeps_two_company_results(self):
+        from core import graph as graph_module
         from documents.profiles import load_company_profiles
+        from evaluation.criteria import TECH
+        from tests.test_supervisor import Workers
 
         figure = document()
         apptronik = document("A1", company="apptronik")
@@ -453,16 +455,18 @@ class TechnologyGraphTests(unittest.TestCase):
         docs = dict(zip(companies, (figure, apptronik)))
         llm = Mock()
         llm.invoke.side_effect = [review(figure), analysis(figure), review(apptronik), analysis(apptronik)]
+        # Technology만 실제 노드로 두고, 나머지 하위 Agent는 대역으로 바꾼다 (LLM·검색 호출 없음)
+        others = {name: node for name, node in Workers().nodes().items() if name != TECH}
         with patch("agents.technology.search_technology", side_effect=lambda query, company, k: [docs[company]]), \
-                patch("agents.technology.get_structured_llm", return_value=llm):
-            state = build_graph().invoke(
+                patch("agents.technology.get_structured_llm", return_value=llm), \
+                patch.dict(graph_module.WORKER_NODES, others):
+            state = graph_module.build_graph().invoke(
                 {"candidate_companies": companies, "company_profiles": load_company_profiles()},
-                config={"recursion_limit": recursion_limit(2)},
+                config={"recursion_limit": graph_module.recursion_limit(2)},
             )
+        self.assertEqual(state["status"], "SUCCESS")
         self.assertEqual(set(state["technology_results"]), set(companies))
         self.assertEqual(set(state["market_traction_results"]), set(companies))
-        self.assertEqual(state["completed_companies"], companies)
-        self.assertTrue(state["analysis_join_ready"])
         self.assertTrue(state["technology_done"])
         for company, doc in docs.items():
             result = state["technology_results"][company]
