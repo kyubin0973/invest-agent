@@ -644,5 +644,26 @@ class TechnologyReworkGraphTests(unittest.TestCase):
         self.assertEqual(len(state["technology_results"]["Figure AI"]["findings"]), len(QUESTIONS))
 
 
+class TechnologyQuotePunctuationTests(unittest.TestCase):
+    """원문의 둥근 따옴표·대시와 LLM의 곧은 따옴표 차이로 올바른 인용을 버리지 않는다."""
+
+    def run_quote(self, quote):
+        doc = document(text="Figure’s robot demonstrated sorting parts in a controlled test — “safely”.")
+        with patch("agents.technology.search_technology", return_value=[doc]), \
+                patch("agents.technology.get_structured_llm") as factory:
+            factory.return_value.invoke.side_effect = [review(doc), draft(doc, quote, ["product"])]
+            return technology_node({"current_company": "Figure AI"})["technology_results"]["Figure AI"]
+
+    def test_straight_punctuation_quote_matches_typographic_original(self):
+        result = self.run_quote('Figure\'s robot demonstrated sorting parts in a controlled test - "safely".')
+        self.assertEqual([e["chunk_id"] for e in result["evidence"]], ["F1_P02_C01"])
+        self.assertFalse(any("인용문이 원문에 없음" in m for m in result["missing_information"]))
+
+    def test_changed_words_are_still_rejected(self):
+        result = self.run_quote("Figure's robot demonstrated sorting boxes in a controlled test.")
+        self.assertEqual(result["evidence"], [])
+        self.assertTrue(any("인용문이 원문에 없음" in m for m in result["missing_information"]))
+
+
 if __name__ == "__main__":
     unittest.main()

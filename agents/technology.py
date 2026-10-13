@@ -112,9 +112,18 @@ def _unique(values: list[str]) -> list[str]:
     return list(dict.fromkeys(value.strip() for value in values if value.strip()))
 
 
+# 원문 PDF는 둥근 따옴표·대시(we’re, “Pick up”, —)를 쓰지만 LLM은 곧은 따옴표로 옮기는 경우가 많다.
+# 문장부호 모양만 맞추고 단어·순서는 그대로 비교하므로 인용 검증 기준을 느슨하게 하지 않는다.
+_PUNCTUATION = str.maketrans({
+    "‘": "'", "’": "'", "‚": "'", "‛": "'", "′": "'",
+    "“": '"', "”": '"', "„": '"', "‟": '"', "″": '"',
+    "‐": "-", "‑": "-", "‒": "-", "–": "-", "—": "-", "−": "-",
+})
+
+
 def _normalize_quote(text: str) -> str:
     """인용 비교용 정규화만 수행한다. 소실된 글자나 의미는 추정하지 않는다."""
-    text = unicodedata.normalize("NFKC", text)
+    text = unicodedata.normalize("NFKC", text).translate(_PUNCTUATION)
     text = "".join(
         " " if char.isspace() else char
         for char in text
