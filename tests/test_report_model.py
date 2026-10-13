@@ -115,6 +115,16 @@ class RewriteTest(unittest.TestCase):
         s = state(report_attempts=1, quality_result=quality("T-Alpha 가장 우수하다고 단정하는 서술입니다"))
         self.assertIn("T-Alpha 가장 우수하다고", report_generator_node(s)["final_report"])
 
+    def test_computed_decision_reason_is_never_omitted(self):
+        """판정 사유(Python 규칙 계산 결과)를 지적해도 보고서에 남고, 점수표도 그대로다."""
+        s = state(report_attempts=2, quality_result=quality("점수 3.00 < 기준"))
+        model, notes = apply_quality_feedback(build_report_model(s), s["quality_result"])
+        self.assertEqual(model.omitted, {})
+        self.assertEqual(len(notes), 1)
+        out = report_generator_node(s)
+        self.assertIn("점수 3.00 < 기준", out["final_report"])
+        self.assertIn("Final Score", out["final_report"])
+
     def test_unmatched_issue_is_reported_not_fatal(self):
         model, unmatched = apply_quality_feedback(build_report_model(state()), quality("보고서에 없는 완전히 다른 문장입니다"))
         self.assertEqual(len(unmatched), 1)

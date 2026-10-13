@@ -259,6 +259,11 @@ class Statement:
     def role(self) -> str:
         return self.id.rsplit(":", 1)[-1]
 
+    @property
+    def protected(self) -> bool:
+        """Python 규칙으로 계산한 결과(판정 사유)는 품질 평가 지적으로 지우지 않는다."""
+        return self.section == SUMMARY_SECTION and self.role == "decision"
+
 
 @dataclass(frozen=True)
 class ReportModel:
@@ -367,6 +372,8 @@ def _same_statement(statement_text: str, issue_text) -> bool:
 def apply_quality_feedback(model: ReportModel, quality: dict | None) -> tuple[ReportModel, list[str]]:
     """owner가 report_generator인 지적의 문장을 보고서에서 제외한다 (결정적 처리, LLM 없음).
 
+    판정 사유와 점수표는 Python 규칙으로 계산한 결과이므로 지적을 받아도 지우지 않는다 (점수표는 문장이 아니라 항상 출력).
+
     반환: (수정된 모델, 문장을 찾지 못한 지적 목록). 제외한 문장은 omitted에 평가 항목과 함께 남는다.
     """
     omitted = dict(model.omitted)
@@ -381,7 +388,10 @@ def apply_quality_feedback(model: ReportModel, quality: dict | None) -> tuple[Re
             if not hits:
                 unmatched.append(f"[{check.get('item')}] {issue.get('statement')}")
                 continue
-            for s in hits:
+            removable = [s for s in hits if not s.protected]
+            if not removable:  # 판정 사유 같은 계산 결과: 지우지 않고 기록만 남긴다
+                unmatched.append(f"[{check.get('item')}] 계산 결과(판정 사유)라 제외하지 않음: {issue.get('statement')}")
+            for s in removable:
                 omitted[s.id] = check.get("item", "")
     return replace(model, omitted=omitted), unmatched
 
