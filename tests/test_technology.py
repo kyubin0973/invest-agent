@@ -130,7 +130,7 @@ class TechnologyNodeTests(unittest.TestCase):
     def test_only_missing_question_is_retried_and_resolved_missing_is_removed(self):
         result = self.result([review(self.doc, insufficient={"reliability"}), review(self.doc), analysis(self.doc)])
         self.assertEqual(self.search.call_count, len(QUESTIONS) + 1)
-        self.assertEqual(self.search.call_args.args[0], "Figure AI targeted reliability measurements")
+        self.assertEqual(self.search.call_args.args[0], "targeted reliability measurements")
         self.assertEqual(result["missing_information"], [])
         self.assertIn("재검색 가능: False", self.llm.invoke.call_args_list[1].args[0][1][1])
 
@@ -202,7 +202,8 @@ class TechnologyNodeTests(unittest.TestCase):
 
     def test_invalid_evidence_removes_dependent_claim_from_all_output_text(self):
         for change in ({"source_id": "FAKE"}, {"chunk_id": "FAKE"},
-                       {"supporting_quote": "This text was invented."}):
+                       {"supporting_quote": "This text was invented."},
+                       {"evidence_level": "E3"}, {"evidence_level": "E4"}, {"evidence_level": "E5"}):
             with self.subTest(change=change):
                 draft = analysis(self.doc, all_questions=False)
                 draft["evidence"][0].update(change)
@@ -218,15 +219,6 @@ class TechnologyNodeTests(unittest.TestCase):
                 self.assertEqual(result["risks"], [])
                 self.assertNotIn("유출되면", json.dumps(result, ensure_ascii=False))
                 self.assertTrue(any("검증 실패" in m for m in result["missing_information"]))
-
-    def test_unverified_level_on_company_source_is_lowered_to_e1_not_dropped(self):
-        for level in ("E3", "E4", "E5"):
-            with self.subTest(level=level):
-                draft = analysis(self.doc, level=level, all_questions=False)
-                result = self.result([review(self.doc), draft])
-                self.assertEqual([e["evidence_level"] for e in result["evidence"]], ["E1"])  # 승급 없이 E1로만
-                self.assertEqual(len(result["findings"]), 1)
-                self.assertTrue(any(f"근거 수준 하향(F1_P02_C01): {level}→E1" in m for m in result["missing_information"]))
 
     def test_partial_invalid_references_drop_entire_compound_finding(self):
         draft = analysis(self.doc, all_questions=False)
@@ -299,7 +291,7 @@ class TechnologyNodeTests(unittest.TestCase):
         self.assertIn("[A5_P02_C01 | A5]", result["risks"][0])
         self.assertNotIn("자체 발표", result["evidence"][0]["fact"])
 
-    def test_external_current_application_keeps_e3_and_lowers_unverified_levels_to_e1(self):
+    def test_external_current_application_allows_e3_but_not_demo_or_operating_levels(self):
         doc = document("A4", source_type="partner",
                        text="Apptronik incorporated TI's motor-control technologies.")
         for level in ("E2", "E3", "E4", "E5"):
@@ -308,17 +300,16 @@ class TechnologyNodeTests(unittest.TestCase):
                 draft["evidence"][0].update(fact="TI 모터 제어 기술이 적용되어 있다.", supporting_quote=doc.page_content)
                 draft["findings"][0]["statement"] = "TI 모터 제어 기술이 적용되어 있다."
                 result = _assemble("Apptronik", [doc], TechnologyAnalysis.model_validate(draft), [])
-                self.assertEqual(len(result["findings"]), 1)
-                # 현재 적용 사실은 E3로 확인되고, 시연·운영·반복 근거가 없는 등급은 E1로만 낮춘다.
-                self.assertEqual(result["evidence"][0]["evidence_level"], "E3" if level == "E3" else "E1")
-        # 출처만 외부이거나 시연이라는 단어만 나오는 계획/부정문은 실적 등급(E2·E3)을 받지 못한다.
+                self.assertEqual(len(result["evidence"]), int(level == "E3"))
+                self.assertEqual(len(result["findings"]), int(level == "E3"))
+                if level == "E3":
+                    self.assertEqual(result["evidence"][0]["evidence_level"], "E3")
+        # 출처만 외부이거나 시연이라는 단어만 나오는 계획/부정문은 실적이 아니다.
         for quote in ("TI will demonstrate a prototype next year.", "TI has not demonstrated a prototype."):
             doc.page_content = quote
             for level in ("E2", "E3"):
-                with self.subTest(quote=quote, level=level):
-                    draft["evidence"][0].update(supporting_quote=quote, evidence_level=level)
-                    result = _assemble("Apptronik", [doc], TechnologyAnalysis.model_validate(draft), [])
-                    self.assertEqual([e["evidence_level"] for e in result["evidence"]], ["E1"])
+                draft["evidence"][0].update(supporting_quote=quote, evidence_level=level)
+                self.assertEqual(_assemble("Apptronik", [doc], TechnologyAnalysis.model_validate(draft), [])["evidence"], [])
 
     def test_component_safety_keeps_application_but_excludes_system_claim_in_fact_or_finding(self):
         doc = document("A4", source_type="partner", text=(
@@ -401,19 +392,14 @@ class TechnologyNodeTests(unittest.TestCase):
         self.assertEqual(len(result["evidence"]), 1)
         self.assertEqual(self.doc.page_content, original)
 
-    def test_normalization_restores_only_broken_ligatures_and_rejects_empty_quote(self):
-        # PDF에서 fi 합자가 NUL로 깨진 자리만 fi/fl/ff로 대조한다 (실제 Apptronik A5 원문 사례).
-        self.doc.page_content = "The robot performs speci\x00c tasks."
-        draft = analysis(self.doc)
-        draft["evidence"][0]["supporting_quote"] = "The robot performs specific tasks."
-        self.assertEqual(len(self.result([review(self.doc), draft])["evidence"]), 1)
-        # 합자가 아닌 빠진 글자는 복원하지 않고, 빈 인용은 받지 않는다.
+    def test_normalization_does_not_restore_missing_letters_or_accept_empty_quote(self):
+        # 합자(fi/fl)가 아닌 빠진 글자는 복원하지 않고, 빈 인용은 받지 않는다.
         self.doc.page_content = "The robot perf\x00rms tasks."
         for quote in ("The robot performs tasks.", "\x00\u200b"):
             with self.subTest(quote=quote):
                 for m in (self.search, self.factory, self.llm.invoke):
                     m.reset_mock()
-                draft = analysis(self.doc)
+                draft = analysis(self.doc, level="E1")
                 draft["evidence"][0]["supporting_quote"] = quote
                 result = self.result([review(self.doc), draft])
                 self.assertEqual(result["evidence"], [])
@@ -541,12 +527,14 @@ class TechnologyReworkTests(unittest.TestCase):
         previous = self.previous()
         new = document("F2", text=NEW_TEXT)
         self.search.return_value = [self.doc, new]
-        result = self.rework(previous, [review(new), draft(new, NEW_TEXT, ["autonomy", "reliability"])],
-                             criterion_ids=["H11"], reason="평가 가능 문항 8개, 근거 부족 문항 H11")
+        with self.assertLogs("agents.technology", level="INFO") as logs:
+            result = self.rework(previous, [review(new), draft(new, NEW_TEXT, ["autonomy", "reliability"])],
+                                 criterion_ids=["H11"], reason="평가 가능 문항 8개, 근거 부족 문항 H11")
+        self.assertIn("resolved=['autonomy', 'reliability'] partial=- unresolved=-", logs.output[0])
 
         # H11 → autonomy·reliability만, 최초와 다른 관점 질의 + 넓힌 Top-K
         targets = (self.q["autonomy"], self.q["reliability"])
-        self.assertEqual(self.queries(), {f"Figure AI {query}" for t in targets for query in (t.rework_query, t.query)})
+        self.assertEqual(self.queries(), {query for t in targets for query in (t.rework_query, t.query)})
         self.assertTrue(all(c.kwargs == {"k": self.rework_k} for c in self.search.call_args_list))
         prompt = self.llm.invoke.call_args_list[0].args[0][1][1]
         for text in ("[Supervisor 재작업 요청]", "근거 부족 평가 문항: H11", "다음 2개 내부 하위 질문",
@@ -589,7 +577,7 @@ class TechnologyReworkTests(unittest.TestCase):
         previous = self.previous()
         invented = draft(self.doc, "This text was invented.", ["product"])
         result = self.rework(previous, [review(self.doc), invented], criterion_ids=["B02"])
-        self.assertEqual(self.queries(), {f"Figure AI {self.q['product'].rework_query}", f"Figure AI {self.q['product'].query}"})
+        self.assertEqual(self.queries(), {self.q['product'].rework_query, self.q['product'].query})
         self.assertEqual(result["findings"], previous["findings"])
         self.assertNotIn("제품·작업능력: 검증된 분석 결과 없음", result["missing_information"])
         self.assertTrue(any("뒷받침 인용문이 원문에 없음" in m for m in result["missing_information"]))
@@ -680,6 +668,211 @@ class TechnologyQuotePunctuationTests(unittest.TestCase):
         result = self.run_quote("Figure's robot demonstrated sorting boxes in a controlled test.")
         self.assertEqual(result["evidence"], [])
         self.assertTrue(any("인용문이 원문에 없음" in m for m in result["missing_information"]))
+
+
+def claim(doc, quote, question_ids, *, level="E1", fact="근거 사실", statement="근거 문장"):
+    return TechnologyAnalysis.model_validate({
+        "evidence": [{**ref(doc), "fact": fact, "supporting_quote": quote, "evidence_level": level}],
+        "findings": [{"question_id": qid, "statement": statement, "evidence_refs": [ref(doc)]} for qid in question_ids],
+        "risks": [], "missing_information": [],
+    })
+
+
+class TechnologyEvidenceRuleTests(unittest.TestCase):
+    """실제 Apptronik 진단(2026-10-13)에서 탈락한 인용으로 검증 규칙을 확인한다."""
+
+    A5_P1 = ("Apptronik, the AI-powered humanoid robotics company, and Jabil (NYSE:\nJBL), a global leader in engineering, "
+             "manufacturing, and supply chain solutions, have announced a pilot and\nstrategic collaboration to build "
+             "Apollo humanoid robots and integrate them into speci\x00c Jabil manufacturing\noperations. "
+             "newly manufactured Apollo units\nwill leverage Jabil’s factory\nenvironment for real-world\nvalidation testing.")
+    A5_P2 = "as we begin producing Apollo units, we can play a role in de\x00ning the future of\nmanufacturing."
+    A4_P1 = ("Apollo utilizes Apptronik’s custom linear and rotary actuators, which will be improved by TI’s "
+             "functional safety compliance, motor control and sensing technologies.")
+
+    def test_broken_ligature_quotes_from_real_source_are_accepted(self):
+        for text, quote in (
+            (self.A5_P1, "have announced a pilot and strategic collaboration to build Apollo humanoid robots and "
+                         "integrate them into specific Jabil manufacturing operations."),
+            (self.A5_P2, "as we begin producing Apollo units, we can play a role in defining the future of manufacturing."),
+        ):
+            with self.subTest(quote=quote[:40]):
+                doc = document("A5", source_type="partner", text=text)
+                result = _assemble("Apptronik", [doc], claim(doc, quote, ["manufacturing"],
+                                                            fact="Jabil 공정 통합·생산을 추진할 계획이다.",
+                                                            statement="Jabil 공정 통합·생산은 계획 단계다."), [])
+                self.assertEqual([e["chunk_id"] for e in result["evidence"]], ["A5_P02_C01"])
+
+    def test_quotes_with_changed_words_are_still_rejected(self):
+        doc = document("A5", source_type="partner", text=self.A5_P2)
+        for quote in ("as we begin producing Apollo units, we can play a role in designing the future of manufacturing.",
+                      "as we began producing Apollo units, we can play a role in defining the future of manufacturing.",
+                      "we can play a role in defining the future of humanoid manufacturing."):
+            with self.subTest(quote=quote[:45]):
+                result = _assemble("Apptronik", [doc], claim(doc, quote, ["manufacturing"]), [])
+                self.assertEqual(result["evidence"], [])
+                self.assertTrue(any("인용문이 원문에 없음" in m for m in result["missing_information"]))
+
+    def test_future_validation_plan_is_not_autonomy_performance(self):
+        doc = document("A5", source_type="partner", text=self.A5_P1)
+        quote = "newly manufactured Apollo units will leverage Jabil’s factory environment for real-world validation testing."
+        # E2(시연)를 붙여도 계획 문장이라 탈락한다 (등급을 자동으로 낮추지 않는다).
+        result = _assemble("Apptronik", [doc], claim(doc, quote, ["autonomy"], level="E2",
+                                                    fact="공장 환경 검증 테스트를 할 계획이다."), [])
+        self.assertEqual(result["evidence"], [])
+        self.assertTrue(any("E2에 필요한" in m for m in result["missing_information"]))
+        # E1(계획)로 표시해도 자율 수행 실적 근거로는 쓰지 않는다.
+        result = _assemble("Apptronik", [doc], claim(doc, quote, ["autonomy", "manufacturing"],
+                                                    fact="공장 환경 검증 테스트를 할 계획이다.",
+                                                    statement="공장 환경 검증 테스트를 계획하고 있다."), [])
+        self.assertEqual([f["dimension"] for f in result["findings"]], ["생산기술·생산능력"])
+        self.assertTrue(any("자율 수행: 미래 계획" in m for m in result["missing_information"]))
+
+    def test_mixed_current_and_future_sentence_is_not_upgraded_but_current_clause_passes(self):
+        doc = document("A4", source_type="partner", text=self.A4_P1)
+        mixed = _assemble("Apptronik", [doc], claim(doc, self.A4_P1, ["architecture"], level="E3"), [])
+        self.assertEqual(mixed["evidence"], [])  # 계획이 섞인 문장으로는 E3 불가, E1로 자동 하향하지도 않음
+        current = "Apollo utilizes Apptronik’s custom linear and rotary actuators"
+        result = _assemble("Apptronik", [doc], claim(doc, current, ["architecture"], level="E3",
+                                                     fact="Apollo는 자체 선형·회전 액추에이터를 사용한다."), [])
+        self.assertEqual([e["evidence_level"] for e in result["evidence"]], ["E3"])
+
+    def test_limited_demo_keeps_scope_and_limits_in_fact_and_finding(self):
+        doc = document()
+        result = _assemble("Figure AI", [doc], claim(doc, "The robot demonstrated sorting parts in a controlled test.",
+                                                    ["autonomy"], level="E2", fact="통제된 테스트에서 부품 분류를 시연했다.",
+                                                    statement="통제된 테스트 환경에서 부품 분류 시연이 확인된다."), [])
+        self.assertIn("실환경 반복 운영·외부 검증은 미확인", result["evidence"][0]["fact"])
+        self.assertIn("실환경 반복 운영·외부 검증은 미확인", result["findings"][0]["statement"])
+        self.assertIn("[F1_P02_C01 | F1]", result["findings"][0]["statement"])  # QA 인용 형식 유지
+
+
+class TechnologyReviewFeedbackTests(unittest.TestCase):
+    """4b2c455 추가 검토에서 재현된 사례."""
+
+    def test_ligature_recovery_only_at_broken_position(self):
+        from agents.technology import _quote_in_source
+        source = "The file is offline. Other speci\x00c tasks."
+        self.assertFalse(_quote_in_source("The flle is offline.", source))   # 정상 위치의 fi는 그대로 비교
+        self.assertFalse(_quote_in_source("The file is ofline.", source))
+        self.assertTrue(_quote_in_source("The file is offline.", source))
+        self.assertTrue(_quote_in_source("Other specific tasks.", source))   # 깨진 위치에서만 복구
+        self.assertFalse(_quote_in_source("Other specific jobs.", source))
+
+    def test_future_plan_quote_cannot_become_achievement_at_any_level(self):
+        doc = document("A5", source_type="partner", text="Jabil will test Apollo in its factory.")
+        quote = "Jabil will test Apollo in its factory."
+        wrong = "Jabil 공장에서 Apollo가 자율 작업을 검증했다."
+        for level in ("E1", "E2", "E3"):
+            with self.subTest(level=level):
+                result = _assemble("Apptronik", [doc], claim(doc, quote, ["autonomy"], level=level,
+                                                            fact=wrong, statement=wrong), [])
+                self.assertEqual(result["evidence"], [])
+                self.assertEqual(result["findings"], [])
+                self.assertTrue(any("자율 수행: 검증된 분석 결과 없음" in m for m in result["missing_information"]))
+        # 계획임을 정확히 쓴 문장은 E1로 보존하되, 자율 수행 실적으로는 쓰지 않는다.
+        plan = "Jabil이 자사 공장에서 Apollo를 시험할 계획이다."
+        result = _assemble("Apptronik", [doc], claim(doc, quote, ["manufacturing", "autonomy"],
+                                                    fact=plan, statement=plan), [])
+        self.assertEqual([(e["evidence_level"], e["fact"]) for e in result["evidence"]], [("E1", plan)])
+        self.assertEqual([f["dimension"] for f in result["findings"]], ["생산기술·생산능력"])
+        self.assertTrue(any("자율 수행: 미래 계획" in m for m in result["missing_information"]))
+        self.assertTrue(any("자율 수행: 검증된 분석 결과 없음" in m for m in result["missing_information"]))
+
+
+class TechnologyReworkResolutionTests(unittest.TestCase):
+    """finding이 생겼다는 이유만으로 재작업 문항을 해결로 세지 않는다."""
+
+    def test_plan_findings_and_insufficient_reviews_are_not_resolved(self):
+        plan_doc = document("A5", company="apptronik", source_type="partner", text=(
+            "Apptronik and Jabil will build Apollo robots. "
+            "Newly manufactured Apollo units will leverage Jabil's factory for real-world validation testing."))
+        reviews = {"reviews": [{"question_id": q, "relevant_refs": [ref(plan_doc)], "sufficient": False,
+                                "missing_information": ["실제 생산량·자율 운영 실적 미확인"], "retry_query": ""}
+                               for q in ("autonomy", "reliability", "manufacturing", "supply_chain")]}
+        plan_draft = {
+            "evidence": [{**ref(plan_doc), "fact": "Jabil 공장에서 검증 테스트를 할 계획이다.",
+                          "supporting_quote": "Newly manufactured Apollo units will leverage Jabil's factory for "
+                                              "real-world validation testing.", "evidence_level": "E1"}],
+            "findings": [{"question_id": q, "statement": "Jabil 공장에서 검증 테스트를 할 계획이다.",
+                          "evidence_refs": [ref(plan_doc)]} for q in ("autonomy", "manufacturing")],
+            "risks": [], "missing_information": []}
+        previous = {"summary": "", "findings": [], "evidence": [], "risks": [], "missing_information": []}
+        state = {"current_company": "Apptronik", "technology_results": {"Apptronik": previous}, "trace_id": "t",
+                 "rework_request": {"company": "Apptronik", "agent": "technology", "criterion_ids": ["H11", "H12"],
+                                    "reason": "근거 부족", "feedback": []}}
+        with patch("agents.technology.search_technology", return_value=[plan_doc]), \
+                patch("agents.technology.get_structured_llm") as factory, \
+                self.assertLogs("agents.technology", level="INFO") as logs:
+            factory.return_value.invoke.side_effect = [reviews, reviews, plan_draft]
+            result = technology_node(state)["technology_results"]["Apptronik"]
+        line = logs.output[0]
+        self.assertIn("resolved=-", line)
+        self.assertIn("partial=['manufacturing']", line)  # 계획 finding은 부분으로만
+        self.assertIn("'autonomy'", line.split("unresolved=")[1])  # 자율 수행 계획 finding은 제외 → 미해결
+        self.assertEqual([f["dimension"] for f in result["findings"]], ["생산기술·생산능력"])
+        self.assertTrue(any(m.startswith("생산기술·생산능력: 실제 생산량") for m in result["missing_information"]))
+
+
+class TechnologyAnnouncementAndCurrentUseTests(unittest.TestCase):
+    A5 = ("Apptronik and Jabil have announced a pilot and strategic collaboration to build Apollo humanoid robots "
+          "and integrate them into speci\x00c Jabil manufacturing operations.")
+
+    def test_announced_collaboration_must_be_described_as_plan(self):
+        doc = document("A5", source_type="partner", text=self.A5)
+        quote = ("Apptronik and Jabil have announced a pilot and strategic collaboration to build Apollo humanoid robots "
+                 "and integrate them into specific Jabil manufacturing operations.")
+        overclaim = "Apptronik은 Jabil과 협력하여 Apollo 로봇의 생산을 확장하고 있다."  # 실제 진단 응답
+        result = _assemble("Apptronik", [doc], claim(doc, quote, ["manufacturing"], fact=overclaim, statement=overclaim), [])
+        self.assertEqual(result["evidence"], [])
+        self.assertTrue(any("미래 계획 인용을 달성 사실로 서술함" in m for m in result["missing_information"]))
+        plan = "Apptronik과 Jabil이 Apollo 생산·공정 통합을 위한 파일럿 협력을 추진한다고 발표했다."
+        result = _assemble("Apptronik", [doc], claim(doc, quote, ["manufacturing"], fact=plan, statement=plan), [])
+        self.assertEqual([e["evidence_level"] for e in result["evidence"]], ["E1"])
+
+    def test_outfitted_with_is_current_application_for_e3_only_for_current_clause(self):
+        text = ("Outfitted with TI motor-control solutions and safety-certified technology, Apollo can work in warehouses "
+                "and factories to complete repetitive and labor-intensive activities.")
+        doc = document("A4", source_type="partner", text=text)
+        current = "Outfitted with TI motor-control solutions and safety-certified technology"
+        fact = "Apollo에 TI 모터 제어 솔루션과 안전 인증 부품 기술이 탑재되어 있다."
+        result = _assemble("Apptronik", [doc], claim(doc, current, ["architecture"], level="E3", fact=fact, statement=fact), [])
+        self.assertEqual([e["evidence_level"] for e in result["evidence"]], ["E3"])
+        # 'can work' 가능성 문장 전체를 E3 근거로 쓰면 여전히 탈락 (실적·현재 사실 아님)
+        result = _assemble("Apptronik", [doc], claim(doc, text, ["product"], level="E3", fact=fact, statement=fact), [])
+        self.assertEqual(result["evidence"], [])
+
+
+class TechnologyAfterRunFeedbackTests(unittest.TestCase):
+    """수정 후 실제 실행(15:11)에서 확인된 사례."""
+
+    def test_accurate_announcement_wording_is_kept_but_progress_claim_is_rejected(self):
+        doc = document("A5", source_type="partner", text=TechnologyAnnouncementAndCurrentUseTests.A5)
+        quote = ("Apptronik and Jabil have announced a pilot and strategic collaboration to build Apollo humanoid robots "
+                 "and integrate them into specific Jabil manufacturing operations.")
+        accurate = "Apptronik과 Jabil은 Apollo 로봇의 생산을 확대하기 위한 협력을 발표했다."  # 실제 응답
+        finding = "Apptronik과 Jabil은 Apollo 로봇의 생산 확대를 위한 협력을 발표했으나, 실제 생산 능력에 대한 구체적인 정보는 부족하다."
+        result = _assemble("Apptronik", [doc], claim(doc, quote, ["manufacturing"], fact=accurate, statement=finding), [])
+        self.assertEqual([e["evidence_level"] for e in result["evidence"]], ["E1"])
+        self.assertEqual(len(result["findings"]), 1)
+        progress = "Apptronik과 Jabil은 협력을 발표했고 Apollo 생산을 확대하고 있다."
+        result = _assemble("Apptronik", [doc], claim(doc, quote, ["manufacturing"], fact=progress, statement=progress), [])
+        self.assertEqual(result["evidence"], [])
+
+    def test_first_round_relevant_chunks_still_reach_analysis(self):
+        a3 = document("A3", company="figure", source_type="partner",
+                      text="The model controlled the robot to put the watering can into the green bin in a lab demo.")
+        main = document()
+        first, final = review(a3), review(main)  # 1차는 A3, 보완 검색 뒤 2차는 다른 청크를 고른 경우
+        for item in first["reviews"]:
+            item.update(sufficient=False, retry_query="more evidence")
+        for item in final["reviews"]:
+            item["sufficient"] = False
+        with patch("agents.technology.search_technology", return_value=[main, a3]), \
+                patch("agents.technology.get_structured_llm") as factory:
+            factory.return_value.invoke.side_effect = [first, final, analysis(main)]
+            technology_node({"current_company": "Figure AI"})
+            prompt = factory.return_value.invoke.call_args_list[2].args[0][1][1]
+        self.assertIn("watering can", prompt)  # 1차 점검에서 고른 청크가 분석 입력에 포함
 
 
 if __name__ == "__main__":
