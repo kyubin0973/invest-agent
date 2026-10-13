@@ -170,7 +170,8 @@ def _issue(criterion: str, reason: str, fix: str, claim: dict | None = None,
 def _is_computed_summary(statement: str) -> bool:
     """Recognize policy labels and verdict rows, while keeping them for Judge review."""
     text = re.sub(r"\*\*|__", "", statement).strip()
-    if re.match(r"^(?:[-*+]\s+)?판정\s*기준\s*[:：]", text):
+    # 판정 기준 설명과 판정 사유는 Python 규칙이 계산해 쓴 문장이라 문서 출처가 없다
+    if re.match(r"^(?:[-*+]\s+)?판정\s*(?:기준|사유)\s*[:：]", text):
         return True
     if not (text.startswith("|") and text.endswith("|")):
         return False
