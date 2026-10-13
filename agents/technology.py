@@ -4,26 +4,46 @@
 → 구조화 분석 → Python 근거 검증. 함수/State 계약은 기존 그래프와 동일하다.
 채점·기업 간 비교·시장 평가는 하지 않는다. API/검색 장애는 호출자에게 전파하며
 자료가 없는 경우와 구분한다. 원문 의미의 정확성은 별도 실제 API 검토가 필요하다.
+
+Supervisor 재작업(rework_request.agent == "technology")을 받으면 처음부터 다시 분석하지 않는다.
+- 근거 부족 평가 문항(B02/B04/B08/B09/H11/H12)을 내부 질문으로 바꿔 그 질문만 다시 검색한다.
+  최초 검색과 다른 관점의 질의(rework_query)와 넓힌 Top-K(REWORK_K)를 쓴다.
+- 품질 평가가 지적한 문장은 기존 결과에서 빼고, 그 문장이 속한 질문을 다시 원문과 대조한다.
+- 재작업 대상이 아닌 질문의 검증된 결과는 그대로 두고, 대상 질문만 새 결과로 바꾼다.
+  새 결과가 검증을 통과하지 못하면 기존 검증 결과를 유지한다(지적된 문장은 복원하지 않음).
+- 재작업 실행은 LangSmith에 technology_rework로 묶이고, 결과 요약은 trace_id와 함께 로그로 남긴다.
 """
 
+from datetime import datetime, timezone
 from typing import Literal
+import logging
 import re
 import unicodedata
 
 from langchain_core.documents import Document
+from langsmith import traceable
 from pydantic import BaseModel, ConfigDict, Field
 
 from core.llm import get_structured_llm
-from core.state import AnalysisResult, InvestmentState
+from core.state import AnalysisResult, InvestmentState, ReworkRequest
 from documents.company import company_key
 from prompts.technology import (
+    CRITERION_QUESTIONS,
     QUESTIONS,
     QUESTIONS_BY_ID,
+    TechnologyQuestion,
     build_analysis_messages,
     build_review_messages,
+    build_rework_note,
 )
 from rag.config import TOP_K
 from rag.retriever import search_technology, to_evidence
+
+logger = logging.getLogger(__name__)
+
+AGENT = "technology"
+REWORK_K = TOP_K * 2  # 재작업 검색은 최초보다 넓게 본다
+MAX_REWORK_NOTE_ITEMS = 10  # 재작업 지시에 넣는 이전 부족 정보 상한 (프롬프트 비대 방지)
 
 
 # Technology 내부 하위 질문 ID. B02/H11 등의 투자평가 Criterion ID와 별개다.
@@ -92,15 +112,48 @@ def _unique(values: list[str]) -> list[str]:
     return list(dict.fromkeys(value.strip() for value in values if value.strip()))
 
 
+# 원문 PDF는 둥근 따옴표·대시(we’re, “Pick up”, —)를 쓰지만 LLM은 곧은 따옴표로 옮기는 경우가 많다.
+# 문장부호 모양만 맞추고 단어·순서는 그대로 비교하므로 인용 검증 기준을 느슨하게 하지 않는다.
+_PUNCTUATION = str.maketrans({
+    "‘": "'", "’": "'", "‚": "'", "‛": "'", "′": "'",
+    "“": '"', "”": '"', "„": '"', "‟": '"', "″": '"',
+    "‐": "-", "‑": "-", "‒": "-", "–": "-", "—": "-", "−": "-",
+})
+
+
 def _normalize_quote(text: str) -> str:
     """인용 비교용 정규화만 수행한다. 소실된 글자나 의미는 추정하지 않는다."""
-    text = unicodedata.normalize("NFKC", text)
+    text = unicodedata.normalize("NFKC", text).translate(_PUNCTUATION)
     text = "".join(
         " " if char.isspace() else char
         for char in text
         if char.isspace() or unicodedata.category(char) not in ("Cc", "Cf")
     )
     return " ".join(text.split())
+
+
+_LIGATURE_MARK = "\ufffd"
+_LIGATURES = re.compile(r"ffi|ffl|ff|fi|fl")
+
+
+def _ligature_key(text: str) -> str:
+    """PDF 추출에서 fi/fl 합자가 NUL(\\x00)로 깨진 자리를 원문·인용 양쪽에서 같은 표시로 맞춘다."""
+    return _LIGATURES.sub(_LIGATURE_MARK, _normalize_quote(text.replace("\x00", _LIGATURE_MARK)))
+
+
+def _quote_in_source(quote: str, source: str) -> bool:
+    """인용문이 원문의 연속 구절인지 대조한다.
+
+    1) 공백·문장부호 모양·제어문자만 정규화해 비교한다 (기존 규칙).
+    2) 원문의 깨진 합자(예: "speci\\x00c")는 인용의 fi/fl/ff(예: "specific")와 같은 것으로 본다.
+       합자 외의 빠진 글자는 복원하지 않는다. 등급·범위 판정 정규식에는 쓰지 않는다.
+    """
+    normalized = _normalize_quote(quote)
+    if not normalized:
+        return False
+    return normalized in _normalize_quote(source) or (
+        "\x00" in source and _ligature_key(quote) in _ligature_key(source)
+    )
 
 
 def _matches(pattern: str, text: str) -> bool:
@@ -154,8 +207,11 @@ def _scope_error(statement: str, quote: str) -> str | None:
     return None
 
 
-def _level_error(item: EvidenceDraft, source_type: str) -> str | None:
-    """허용 근거가 명시되지 않은 등급은 제외한다. 자동 승급/강등하지 않는다."""
+def _level_shortfall(item: EvidenceDraft, source_type: str) -> str | None:
+    """LLM이 붙인 등급의 조건이 인용문으로 확인되지 않으면 그 이유를 돌려준다.
+
+    조건을 못 갖춘 근거는 버리지 않고 가장 낮은 E1(주장·계획)로만 낮춘다 (_assemble). 승급은 하지 않는다.
+    """
     level = item.evidence_level
     confirmed = _confirmed_sentences(item.supporting_quote)
     if source_type == "company" and level not in ("E1", "E2"):
@@ -168,15 +224,15 @@ def _level_error(item: EvidenceDraft, source_type: str) -> str | None:
         required = _CURRENT if level == "E3" else _OPERATION
         if not _matches(required, confirmed) or (level == "E5" and not _matches(_REPEATED, confirmed)):
             return f"{level}에 필요한 현재 사실·운영·반복 확인 근거 없음"
-    return _scope_error(item.fact, item.supporting_quote)
+    return None
 
 
-def _search(company: str, queries: list[str], scope: dict | None) -> list[Document]:
+def _search(company: str, queries: list[str], scope: dict | None, k: int = TOP_K) -> list[Document]:
     """검색기의 기업/분야 필터를 사용하고 프로필의 허용 범위도 확인한다."""
     docs = {}
     key = company_key(company)
     for query in _unique(queries):
-        for doc in search_technology(f"{company} {query}", company, k=TOP_K):
+        for doc in search_technology(f"{company} {query}", company, k=k):
             m = doc.metadata
             if m.get("company") != key or m.get("domain") != "technology":
                 continue
@@ -196,23 +252,30 @@ def _valid_ref(ref: EvidenceReference, available: dict[str, dict]) -> bool:
     return item is not None and item["source_id"] == ref.source_id
 
 
-def _review(company: str, docs: list[Document], *, can_retry: bool) -> list[QuestionReview]:
+def _review(
+    company: str, docs: list[Document], *, can_retry: bool,
+    questions: tuple[TechnologyQuestion, ...] = QUESTIONS, rework_note: str = "",
+    run_name: str = "technology_review",
+) -> list[QuestionReview]:
+    targets = {q.id for q in questions}
     if docs:
         raw = get_structured_llm(RetrievalReview).invoke(
-            build_review_messages(company, docs, can_retry=can_retry)
+            build_review_messages(company, docs, can_retry=can_retry, questions=questions, rework_note=rework_note),
+            config={"run_name": run_name},
         )
         review = RetrievalReview.model_validate(raw)
         by_id = {}
         for item in review.reviews:
             if item.question_id not in QUESTIONS_BY_ID or item.question_id in by_id:
                 raise ValueError(f"Technology 근거 점검의 잘못된/중복 question_id: {item.question_id}")
-            by_id[item.question_id] = item
+            if item.question_id in targets:  # 재작업 범위 밖 질문의 점검은 쓰지 않는다
+                by_id[item.question_id] = item
     else:
         by_id = {}
 
     available = {d.metadata["chunk_id"]: d.metadata for d in docs}
     checked = []
-    for question in QUESTIONS:
+    for question in questions:
         item = by_id.get(question.id)
         if item is None:
             item = QuestionReview(
@@ -251,7 +314,8 @@ def _render_statement(statement: str, refs: list[dict], evidence: dict[str, dict
 
 
 def _assemble(
-    company: str, docs: list[Document], draft: TechnologyAnalysis, missing: list[str]
+    company: str, docs: list[Document], draft: TechnologyAnalysis, missing: list[str],
+    questions: tuple[TechnologyQuestion, ...] = QUESTIONS,
 ) -> AnalysisResult:
     """LLM의 Metadata를 사용하지 않고 실제 원문에서 근거를 재구성한다."""
     originals = {d.metadata["chunk_id"]: d for d in docs}
@@ -268,20 +332,24 @@ def _assemble(
             reason = "인용 ID가 검색 원본과 일치하지 않음"
         elif counts[item.chunk_id] > 1:
             reason = "동일 청크의 근거 분석이 중복됨"
-        elif not _normalize_quote(item.supporting_quote) or (
-            _normalize_quote(item.supporting_quote) not in _normalize_quote(originals[item.chunk_id].page_content)
-        ):
+        elif not _quote_in_source(item.supporting_quote, originals[item.chunk_id].page_content):
             reason = "뒷받침 인용문이 원문에 없음"
         else:
-            reason = _level_error(item, available[item.chunk_id]["source_type"])
+            reason = _scope_error(item.fact, item.supporting_quote)
         if reason:
             missing.append(f"근거 검증 실패({item.chunk_id}): {reason}")
             continue
+        level = item.evidence_level
+        shortfall = _level_shortfall(item, available[item.chunk_id]["source_type"])
+        if shortfall:
+            # 상위 등급 조건이 확인되지 않으면 버리지 않고 E1(주장·계획 수준)로 낮춰 보존한다.
+            missing.append(f"근거 수준 하향({item.chunk_id}): {level}→E1, {shortfall}")
+            level = "E1"
         fact = item.fact
         if available[item.chunk_id]["source_type"] == "company":
             fact = f"{company} 자체 발표에 따르면: {fact}"
         evidence[item.chunk_id] = {
-            **available[item.chunk_id], "fact": fact, "evidence_level": item.evidence_level,
+            **available[item.chunk_id], "fact": fact, "evidence_level": level,
         }
 
     # 참조의 존재 여부와 LLM의 별도 근거 분석 누락은 구분한다.
@@ -295,12 +363,15 @@ def _assemble(
 
     used_ids = set()
     covered_questions = set()
+    targets = {q.id for q in questions}
 
     def validate_findings(items: list[FindingDraft]) -> list[dict]:
         findings = []
         for item in items:
             if item.question_id not in QUESTIONS_BY_ID:
                 missing.append(f"분석 범위 밖 question_id 제외: {item.question_id}")
+                continue
+            if item.question_id not in targets:  # 재작업 대상이 아닌 질문은 기존 결과를 유지한다
                 continue
             # 일부 인용을 제거한 뒤 원래 복합 주장을 그대로 남기지 않는다.
             if not item.evidence_refs or not all(_valid_ref(ref, evidence) for ref in item.evidence_refs):
@@ -327,7 +398,7 @@ def _assemble(
 
     findings = validate_findings(draft.findings)
     risks = validate_findings(draft.risks)
-    for question in QUESTIONS:
+    for question in questions:
         if question.id not in covered_questions:
             missing.append(f"{question.dimension}: 검증된 분석 결과 없음")
     # 자유 요약에 검증 실패한 주장이 남지 않도록 검증된 문장만 재사용한다.
@@ -342,19 +413,21 @@ def _assemble(
     }
 
 
-def technology_node(state: InvestmentState) -> dict:
-    company = state.get("current_company")
-    if not isinstance(company, str) or not company.strip():
-        raise ValueError("Technology Agent에는 비어 있지 않은 current_company가 필요합니다.")
-    scope = state.get("company_profiles", {}).get(company, {}).get("document_scope")
-    docs = _search(company, [q.query for q in QUESTIONS], scope)
-    reviews = _review(company, docs, can_retry=True)
+def _analyze(
+    company: str, scope: dict | None, questions: tuple[TechnologyQuestion, ...] = QUESTIONS, *,
+    queries: list[str] | None = None, k: int = TOP_K, rework_note: str = "", run_prefix: str = "technology",
+) -> AnalysisResult:
+    """하위 질문별 검색 → 충분성 점검 → 부족 질문만 1회 보완 → 구조화 분석 → Python 근거 검증."""
+    docs = _search(company, queries or [q.query for q in questions], scope, k=k)
+    reviews = _review(company, docs, can_retry=True, questions=questions,
+                      rework_note=rework_note, run_name=f"{run_prefix}_review")
     retries = [r.retry_query for r in reviews if not r.sufficient]
     if retries:
-        extra = _search(company, retries, scope)
+        extra = _search(company, retries, scope, k=k)
         docs = list({d.metadata["chunk_id"]: d for d in [*docs, *extra]}.values())
         # 1회 보완 라운드 후에는 더 이상 검색하지 않는다.
-        reviews = _review(company, docs, can_retry=False)
+        reviews = _review(company, docs, can_retry=False, questions=questions,
+                          rework_note=rework_note, run_name=f"{run_prefix}_review_final")
 
     missing = [
         f"{QUESTIONS_BY_ID[r.question_id].dimension}: {message}"
@@ -364,10 +437,175 @@ def technology_node(state: InvestmentState) -> dict:
     relevant_docs = [d for d in docs if d.metadata["chunk_id"] in relevant_ids]
     if relevant_docs:
         raw = get_structured_llm(TechnologyAnalysis).invoke(
-            build_analysis_messages(company, relevant_docs, missing)
+            build_analysis_messages(company, relevant_docs, missing, questions=questions, rework_note=rework_note),
+            config={"run_name": f"{run_prefix}_analysis"},
         )
         draft = TechnologyAnalysis.model_validate(raw)
     else:
         draft = TechnologyAnalysis(evidence=[], findings=[], risks=[], missing_information=[])
-    result = _assemble(company, docs, draft, missing)
+    return _assemble(company, docs, draft, missing, questions=questions)
+
+
+# ---------------------------------------------------------------------------
+# Supervisor 재작업
+# ---------------------------------------------------------------------------
+_CITATION = re.compile(r"\[([A-Za-z0-9_.:-]+)\s*\|\s*([A-Za-z0-9_.:-]+)\]")  # QA와 같은 인용 형식
+_COMPANY_CLAIM = "기업 자체 발표 포함(외부 확인과 구분):"
+_DIMENSION_ORDER = {q.dimension: i for i, q in enumerate(QUESTIONS)}
+_QUESTION_BY_DIMENSION = {q.dimension: q for q in QUESTIONS}
+
+
+def _rework_request(state: InvestmentState, company: str) -> ReworkRequest | None:
+    """현재 기업의 Technology 재작업 요청만 받는다. 다른 Agent·기업의 요청은 무시한다."""
+    request = state.get("rework_request")
+    if not request or request.get("agent") != AGENT or request.get("company") != company:
+        return None
+    return request
+
+
+def _cited(text: str) -> set[str]:
+    return {chunk_id for chunk_id, _ in _CITATION.findall(text)}
+
+
+def _claim_text(text: str) -> str:
+    """인용 표시·기업 발표 표기·말줄임을 지운 비교용 문장."""
+    text = _CITATION.sub(" ", text).replace(_COMPANY_CLAIM, " ").replace("…", " ")
+    return " ".join(text.split())
+
+
+def _is_flagged(statement: str, note: str) -> bool:
+    """품질 평가 지적이 이 분석 문장을 가리키는지: 같은 청크 인용 또는 문장 일치(보고서 말줄임 포함)."""
+    if _cited(statement) & _cited(note):
+        return True
+    claim, text = _claim_text(statement), _claim_text(note)
+    return len(claim) >= 10 and (claim in text or claim[:40] in text)
+
+
+def _rework_scope(
+    request: ReworkRequest, previous: AnalysisResult,
+) -> tuple[tuple[TechnologyQuestion, ...], set[str], list[str]]:
+    """재작업할 질문, 빼야 할 기존 문장, 대응 질문이 없는 평가 문항을 정한다."""
+    target_ids: set[str] = set()
+    unmapped = []
+    for criterion_id in request.get("criterion_ids") or []:
+        if criterion_id in CRITERION_QUESTIONS:
+            target_ids.update(CRITERION_QUESTIONS[criterion_id])
+        else:
+            unmapped.append(criterion_id)
+
+    flagged: set[str] = set()
+    for note in request.get("feedback") or []:
+        findings = [f for f in previous.get("findings", []) if _is_flagged(f["statement"], note)]
+        risks = [r for r in previous.get("risks", []) if _is_flagged(r, note)]
+        flagged.update(f["statement"] for f in findings)
+        flagged.update(risks)
+        target_ids.update(_QUESTION_BY_DIMENSION[f["dimension"]].id for f in findings
+                          if f["dimension"] in _QUESTION_BY_DIMENSION)
+        risk_chunks = set().union(*(_cited(r) for r in risks)) if risks else set()
+        target_ids.update(_QUESTION_BY_DIMENSION[f["dimension"]].id for f in previous.get("findings", [])
+                          if f["dimension"] in _QUESTION_BY_DIMENSION
+                          and risk_chunks & {ref["chunk_id"] for ref in f["evidence_refs"]})
+        if not findings and not risks:
+            # 지적 문장을 기존 분석과 연결하지 못하면 모든 질문을 다시 원문과 대조한다.
+            target_ids.update(QUESTIONS_BY_ID)
+
+    if not target_ids:  # 대응 질문이 없는 요청이면 전체 질문을 다시 점검한다
+        target_ids.update(QUESTIONS_BY_ID)
+    return tuple(q for q in QUESTIONS if q.id in target_ids), flagged, unmapped
+
+
+def _merge(
+    previous: AnalysisResult, fresh: AnalysisResult,
+    questions: tuple[TechnologyQuestion, ...], flagged: set[str], company: str,
+) -> AnalysisResult:
+    """대상 질문 중 새로 검증된 결과가 나온 질문만 바꾸고, 나머지 검증 결과와 부족 정보는 유지한다."""
+    target_dims = {q.dimension for q in questions}
+    replaced = target_dims & {f["dimension"] for f in fresh["findings"]}
+    kept = [
+        f for f in previous.get("findings", [])
+        if f["statement"] not in flagged and f["dimension"] not in replaced
+    ]
+    findings = sorted([*kept, *fresh["findings"]], key=lambda f: _DIMENSION_ORDER.get(f["dimension"], len(QUESTIONS)))
+    risks = _unique([*(r for r in previous.get("risks", []) if r not in flagged), *fresh["risks"]])
+
+    used = {ref["chunk_id"] for f in findings for ref in f["evidence_refs"]}
+    used |= set().union(*(_cited(r) for r in risks)) if risks else set()
+    evidence = {e["chunk_id"]: e for e in previous.get("evidence", [])}
+    evidence.update({e["chunk_id"]: e for e in fresh["evidence"]})  # 새로 검증한 근거가 우선
+
+    covered = {f["dimension"] for f in findings}
+    resolved_notes = {f"{dim}: 검증된 분석 결과 없음" for dim in covered}
+    missing = [
+        m for m in previous.get("missing_information", [])
+        if m not in resolved_notes and not any(m.startswith(f"{dim}:") for dim in replaced)
+    ]
+    missing += [m for m in fresh["missing_information"] if m not in resolved_notes]
+    missing += [f"{q.dimension}: 검증된 분석 결과 없음" for q in questions if q.dimension not in covered]
+
+    summary = "\n".join(f["statement"] for f in (findings or [{"statement": r} for r in risks])[:3])
+    return {
+        "summary": summary or f"{company}: 기술·제품을 판단할 검증된 근거가 부족합니다.",
+        "findings": findings,
+        "evidence": [item for key, item in evidence.items() if key in used],
+        "risks": risks,
+        "missing_information": _unique(missing),
+    }
+
+
+@traceable(name="technology_rework")
+def _rework(
+    company: str, scope: dict | None, previous: AnalysisResult, request: ReworkRequest, trace_id: str | None = None,
+) -> AnalysisResult:
+    """Supervisor가 지정한 부족 질문만 다시 검색·검증하고 기존 결과와 병합한다."""
+    questions, flagged, unmapped = _rework_scope(request, previous)
+    target_dims = {q.dimension for q in questions}
+    previous_missing = [
+        m for m in previous.get("missing_information", []) if any(m.startswith(f"{dim}:") for dim in target_dims)
+    ][:MAX_REWORK_NOTE_ITEMS]
+    note = build_rework_note(
+        request.get("reason", ""), list(request.get("criterion_ids") or []), list(request.get("feedback") or []),
+        questions, previous_missing,
+    )
+    # 최초 질의(넓힌 Top-K)로 기존 근거를 다시 대조하고, 다른 관점 질의로 새 근거를 찾는다.
+    queries = [query for q in questions for query in (q.rework_query, q.query) if query]
+    fresh = _analyze(company, scope, questions, queries=queries, k=REWORK_K,
+                     rework_note=note, run_prefix="technology_rework")
+    result = _merge(previous, fresh, questions, flagged, company)
+
+    covered = {f["dimension"] for f in result["findings"]}
+    outcome = {
+        "trace_id": trace_id,
+        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "company": company,
+        "criterion_ids": list(request.get("criterion_ids") or []),
+        "unmapped_criterion_ids": unmapped,
+        "feedback_count": len(request.get("feedback") or []),
+        "questions": [q.id for q in questions],
+        "resolved": [q.id for q in questions if q.dimension in covered],
+        "unresolved": [q.id for q in questions if q.dimension not in covered],
+        "removed_statements": len(flagged),
+        "evidence_before": len(previous.get("evidence", [])),
+        "evidence_after": len(result["evidence"]),
+    }
+    logger.info(
+        "%s [%s] technology rework company=%s criteria=%s questions=%s resolved=%s unresolved=%s "
+        "removed=%d evidence=%d→%d",
+        outcome["ts"], trace_id, company, outcome["criterion_ids"] or "-", outcome["questions"],
+        outcome["resolved"] or "-", outcome["unresolved"] or "-", outcome["removed_statements"],
+        outcome["evidence_before"], outcome["evidence_after"],
+    )
+    return result
+
+
+def technology_node(state: InvestmentState) -> dict:
+    company = state.get("current_company")
+    if not isinstance(company, str) or not company.strip():
+        raise ValueError("Technology Agent에는 비어 있지 않은 current_company가 필요합니다.")
+    scope = state.get("company_profiles", {}).get(company, {}).get("document_scope")
+    request = _rework_request(state, company)
+    previous = (state.get("technology_results") or {}).get(company)
+    if request and previous:
+        result = _rework(company, scope, previous, request, trace_id=state.get("trace_id"))
+    else:
+        result = _analyze(company, scope)
     return {"technology_results": {company: result}, "technology_done": True}
