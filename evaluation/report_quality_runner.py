@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 import uuid
 
-from agents.quality_evaluator import evaluate_report
+from agents.quality_evaluator import evaluate_report_details as evaluate_report
 from evaluation.report_quality import QualityJudgeError, prepare_input, redact_secrets
 
 OUTPUT_DIR = Path(__file__).resolve().parents[1] / "outputs" / "qa"

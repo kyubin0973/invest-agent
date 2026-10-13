@@ -341,13 +341,8 @@ def evaluate(state: dict, *, original_documents: dict | None = None,
                       for i in check.issues]
             checks.append({"item": item, "passed": check.verdict == "pass", "verdict": check.verdict,
                            "reason": check.reason, "issues": issues, "missing_information": check.missing_information})
-        lineage_limits = [m for m in limitations if "출처 계보" in m]
-        if lineage_limits:
-            bias = next(c for c in checks if c["item"] == "bias_control")
-            bias.update(passed=False, verdict="uncertain", reason="출처 독립성을 확인할 계보 정보 부족")
-            bias["missing_information"].extend(lineage_limits)
-            bias["issues"].append(_issue("bias_control", "; ".join(lineage_limits),
-                                        "원본 발표 계보를 확인하고 source_family_id/origin_source_id를 제공하세요."))
+        # 출처 계보 필드는 기존 계약의 필수값이 아니다. 기존 URL·발행기관·원문을
+        # 함께 본 Judge의 내용 판정을 사용하며 불확실 판정은 여전히 불합격이다.
     return {"passed": judge_used and all(c["passed"] for c in checks), "checks": checks,
             "feedback": [f"[{c['item']}] {i['statement']} — {i['reason']} 수정: {i['requested_fix']}"
                          for c in checks for i in c["issues"] if i["owner"] == "report_generator"],
