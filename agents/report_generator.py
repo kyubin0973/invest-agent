@@ -303,6 +303,33 @@ def _chunk_refs(evidence_refs) -> tuple[tuple[str, str], ...]:
     return tuple(pairs)
 
 
+_PY_NOTE = re.compile(r"^\[Python 검증:[^\]]*\]\s*")
+
+
+def _overlaps(a: str, b: str) -> bool:
+    """두 문장이 같은 서술인지: 한쪽이 다른 쪽에 포함된다 (너무 짧은 문장은 제외)."""
+    a, b = _normalize(a), _normalize(b)
+    return len(a) >= 15 and len(b) >= 15 and (a[:40] in b or b[:40] in a)
+
+
+def _refs_from(sources: list[tuple[str, list]], items) -> tuple[tuple[str, str], ...]:
+    """items의 문장이 sources(문장, 근거 목록)의 문장과 같은 서술이면 그 근거를 인용으로 붙인다 (실제 근거 연결만, 추측 없음)."""
+    pairs: list[tuple[str, str]] = []
+    for item in items or []:
+        text = item.get("text") if isinstance(item, dict) else item
+        for source_text, refs in sources:
+            if source_text and _overlaps(str(text or ""), source_text):
+                for pair in _chunk_refs(refs):
+                    if pair not in pairs:
+                        pairs.append(pair)
+    return tuple(pairs)
+
+
+def _criteria_sources(result: dict) -> list[tuple[str, list]]:
+    """판정 점수 근거 문장(reasoning)과 그 Evidence. 핵심 강점·리스크는 이 문장에서 나온다."""
+    return [(_PY_NOTE.sub("", str(c.get("reasoning") or "")), c.get("evidence") or []) for c in result.get("criteria") or []]
+
+
 def _agent_statements(section: str, company: str, result: dict, max_findings: int, max_chars: int) -> list[Statement]:
     labels = _AGENT_LABELS[section]
     findings = (result.get("findings") or [])[:max_findings]
@@ -324,15 +351,23 @@ def _agent_statements(section: str, company: str, result: dict, max_findings: in
             _short(f.get("statement"), max_chars), _source_ids(f.get("evidence_refs")), ANALYSIS,
             _chunk_refs(f.get("evidence_refs")),
         ))
-    out.append(Statement(
-        f"{section}:{company}:risks", section, company, labels["risks"],
-        _join(result.get("risks"), labels["risks_empty"]), (), LIMITATION,
-    ))
-    out.append(Statement(
-        f"{section}:{company}:missing", section, company, labels["missing"],
-        _join(result.get("missing_information"), labels["missing_empty"]), (), LIMITATION,
-    ))
+    finding_sources = [(str(f.get("statement") or ""), f.get("evidence_refs") or []) for f in result.get("findings") or []]
+    for role, key, empty in (("risks", "risks", "risks_empty"), ("missing", "missing_information", "missing_empty")):
+        items = result.get(key)
+        pairs = _refs_from(finding_sources, items)  # 리스크가 근거 있는 분석 문장을 그대로 담고 있으면 그 근거를 인용한다
+        out.append(Statement(
+            f"{section}:{company}:{role}", section, company, labels[role],
+            _join(items, labels[empty]), tuple(dict.fromkeys(sid for _, sid in pairs)), LIMITATION, pairs,
+        ))
     return out
+
+
+def _judge_statement(result: dict, company: str, role: str, label: str, key: str) -> Statement:
+    """Judge의 강점·리스크 서술. 점수 근거 문장에서 나온 것이므로 그 Evidence를 인용으로 붙인다."""
+    items = (result.get(key) or [])[:3]
+    pairs = _refs_from(_criteria_sources(result), items)
+    return Statement(f"{SUMMARY_SECTION}:{company}:{role}", SUMMARY_SECTION, company, label,
+                     _join(result.get(key), "-", 3), tuple(dict.fromkeys(sid for _, sid in pairs)), JUDGEMENT, pairs)
 
 
 def build_report_model(state: InvestmentState, max_findings: int = MAX_FINDINGS, max_chars: int = MAX_TEXT_CHARS) -> ReportModel:
@@ -349,10 +384,8 @@ def build_report_model(state: InvestmentState, max_findings: int = MAX_FINDINGS,
         statements += [
             Statement(f"{SUMMARY_SECTION}:{c}:decision", SUMMARY_SECTION, c, "판정 사유",
                       _short(r.get("decision_reason") or "판단 사유 미기재", 400), (), JUDGEMENT),
-            Statement(f"{SUMMARY_SECTION}:{c}:strengths", SUMMARY_SECTION, c, "핵심 강점",
-                      _join(r.get("key_strengths"), "-", 3), (), JUDGEMENT),
-            Statement(f"{SUMMARY_SECTION}:{c}:risks", SUMMARY_SECTION, c, "관리 리스크",
-                      _join(r.get("key_risks"), "-", 3), (), JUDGEMENT),
+            _judge_statement(r, c, "strengths", "핵심 강점", "key_strengths"),
+            _judge_statement(r, c, "risks", "관리 리스크", "key_risks"),
         ]
     for c in companies:
         statements += _agent_statements(TECH_SECTION, c, tech.get(c) or {}, max_findings, max_chars)
