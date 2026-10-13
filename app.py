@@ -30,7 +30,6 @@ def main() -> None:
     tracing.setup()  # 그래프 실행 전에 설정해야 전체 실행이 U_2_4 프로젝트에 한 번에 기록된다
     configure_judge_logging()
     logging.getLogger("agents.supervisor").setLevel(logging.INFO)
-    logging.getLogger("agents.technology").setLevel(logging.INFO)  # 기술 재작업 결과(해결/미해결 질문) 출력
     logging.basicConfig(format="%(message)s")
 
     # trace_id 하나로 State, 로그, LangSmith Trace, Checkpoint(thread_id)를 잇는다
