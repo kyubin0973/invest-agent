@@ -474,5 +474,196 @@ class TechnologyGraphTests(unittest.TestCase):
             self.assertNotIn("STUB", result["summary"])
 
 
+def draft(doc, quote, question_ids, statement="통제된 테스트에서 20시간 자율 동작을 시연했다."):
+    """특정 질문에만 근거를 다는 분석 응답."""
+    return {
+        "evidence": [{**ref(doc), "fact": "제한 환경 시연을 발표했다.", "supporting_quote": quote,
+                      "evidence_level": "E2"}],
+        "findings": [{"question_id": qid, "statement": statement, "evidence_refs": [ref(doc)]}
+                     for qid in question_ids],
+        "risks": [], "missing_information": [],
+    }
+
+
+NEW_TEXT = "Figure 02 demonstrated autonomous operation for 20 hours in a controlled test."
+
+
+class TechnologyReworkTests(unittest.TestCase):
+    """Supervisor 재작업: 지정 질문만 재검색 → 근거 검증 → 기존 결과와 병합"""
+
+    def setUp(self):
+        from agents.technology import REWORK_K
+        from prompts.technology import QUESTIONS_BY_ID
+        self.rework_k = REWORK_K
+        self.q = QUESTIONS_BY_ID
+        self.doc = document()
+        self.state = {"current_company": "Figure AI", "technology_results": {},
+                      "market_traction_results": {}, "trace_id": "trace-1"}
+        self.search = self.enterContext(patch("agents.technology.search_technology", return_value=[self.doc]))
+        self.factory = self.enterContext(patch("agents.technology.get_structured_llm"))
+        self.llm = self.factory.return_value
+
+    def previous(self):
+        self.llm.invoke.side_effect = [review(self.doc), analysis(self.doc)]
+        result = technology_node(self.state)["technology_results"]["Figure AI"]
+        for m in (self.search, self.factory, self.llm.invoke):
+            m.reset_mock()
+        return result
+
+    def rework(self, previous, responses, **request):
+        rework_request = {"company": "Figure AI", "agent": "technology", "criterion_ids": [],
+                          "reason": "근거 부족", "feedback": [], **request}
+        state = {**self.state, "technology_results": {"Figure AI": previous}, "rework_request": rework_request}
+        self.llm.invoke.side_effect = responses
+        return technology_node(state)["technology_results"]["Figure AI"]
+
+    def queries(self):
+        return {c.args[0] for c in self.search.call_args_list}
+
+    def test_criterion_rework_searches_only_mapped_questions_and_keeps_other_results(self):
+        previous = self.previous()
+        new = document("F2", text=NEW_TEXT)
+        self.search.return_value = [self.doc, new]
+        result = self.rework(previous, [review(new), draft(new, NEW_TEXT, ["autonomy", "reliability"])],
+                             criterion_ids=["H11"], reason="평가 가능 문항 8개, 근거 부족 문항 H11")
+
+        # H11 → autonomy·reliability만, 최초와 다른 관점 질의 + 넓힌 Top-K
+        targets = (self.q["autonomy"], self.q["reliability"])
+        self.assertEqual(self.queries(), {f"Figure AI {query}" for t in targets for query in (t.rework_query, t.query)})
+        self.assertTrue(all(c.kwargs == {"k": self.rework_k} for c in self.search.call_args_list))
+        prompt = self.llm.invoke.call_args_list[0].args[0][1][1]
+        for text in ("[Supervisor 재작업 요청]", "근거 부족 평가 문항: H11", "다음 2개 내부 하위 질문",
+                     "autonomy: 시연", "reliability: 실환경"):
+            self.assertIn(text, prompt)
+        self.assertNotIn("product: 실제 어떤 작업", prompt)
+        self.assertEqual([c.kwargs["config"]["run_name"] for c in self.llm.invoke.call_args_list],
+                         ["technology_rework_review", "technology_rework_analysis"])
+
+        # 대상 질문은 새 근거로 바뀌고, 나머지 6개 질문의 검증 결과는 그대로
+        self.assertEqual([f["dimension"] for f in result["findings"]], [q.dimension for q in QUESTIONS])
+        by_dim = {f["dimension"]: f for f in result["findings"]}
+        for t in targets:
+            self.assertEqual(by_dim[t.dimension]["evidence_refs"], [ref(new)])
+        kept = [f for f in previous["findings"] if f["dimension"] not in {t.dimension for t in targets}]
+        self.assertEqual([f for f in result["findings"] if f["dimension"] not in {t.dimension for t in targets}], kept)
+        self.assertEqual({e["chunk_id"] for e in result["evidence"]}, {"F1_P02_C01", "F2_P02_C01"})
+        self.assertEqual(result["missing_information"], [])
+
+    def test_quality_feedback_removes_flagged_statement_and_rechecks_its_question(self):
+        from rag.retriever import to_evidence
+        safety_doc = document("F3")
+        product = {"dimension": "제품·작업능력", "statement": "제품 근거 문장 [F1_P02_C01 | F1]",
+                   "evidence_refs": [ref(self.doc)]}
+        safety = {"dimension": "기술·안전 위험", "statement": "로봇 전체 안전성이 확보되었다. [F3_P02_C01 | F3]",
+                  "evidence_refs": [ref(safety_doc)]}
+        previous = {"summary": "s", "findings": [product, safety], "risks": [], "missing_information": [],
+                    "evidence": [to_evidence(self.doc), to_evidence(safety_doc)]}
+        note = "[groundedness] • 기술·안전 위험: 로봇 전체 안전성이 확보되었다. [F3_P02_C01 | F3] — 원문은 부품 인증만 언급"
+        self.search.return_value = []  # 새 근거를 찾지 못한 경우
+        result = self.rework(previous, [], feedback=[note], reason="품질 평가 지적 1건")
+
+        self.assertTrue(all(self.q["safety"].query in q or self.q["safety"].rework_query in q for q in self.queries()))
+        self.factory.assert_not_called()
+        self.assertEqual(result["findings"], [product])  # 지적 문장은 복원하지 않는다
+        self.assertEqual([e["chunk_id"] for e in result["evidence"]], ["F1_P02_C01"])
+        self.assertIn("기술·안전 위험: 검증된 분석 결과 없음", result["missing_information"])
+
+    def test_previous_verified_result_is_kept_when_rework_evidence_fails(self):
+        previous = self.previous()
+        invented = draft(self.doc, "This text was invented.", ["product"])
+        result = self.rework(previous, [review(self.doc), invented], criterion_ids=["B02"])
+        self.assertEqual(self.queries(), {f"Figure AI {self.q['product'].rework_query}", f"Figure AI {self.q['product'].query}"})
+        self.assertEqual(result["findings"], previous["findings"])
+        self.assertNotIn("제품·작업능력: 검증된 분석 결과 없음", result["missing_information"])
+        self.assertTrue(any("뒷받침 인용문이 원문에 없음" in m for m in result["missing_information"]))
+
+    def test_request_for_other_agent_or_company_runs_normal_analysis(self):
+        previous = self.previous()
+        for request in ({"agent": "market_traction"}, {"company": "Apptronik"}):
+            with self.subTest(request=request):
+                for m in (self.search, self.factory, self.llm.invoke):
+                    m.reset_mock()
+                self.rework(previous, [review(self.doc), analysis(self.doc)], criterion_ids=["H11"], **request)
+                self.assertEqual(self.search.call_count, len(QUESTIONS))
+                self.assertTrue(all(c.kwargs == {"k": 5} for c in self.search.call_args_list))
+                self.assertNotIn("[Supervisor 재작업 요청]", self.llm.invoke.call_args_list[0].args[0][1][1])
+
+    def test_every_technology_criterion_maps_to_annotated_questions(self):
+        from evaluation.criteria import criteria_for
+        from prompts.technology import CRITERION_QUESTIONS
+        self.assertEqual(set(CRITERION_QUESTIONS), {c.id for c in criteria_for("technology")})
+        for criterion_id, question_ids in CRITERION_QUESTIONS.items():
+            for qid in question_ids:
+                self.assertIn(f"({criterion_id})", self.q[qid].question)
+                self.assertTrue(self.q[qid].rework_query)
+                self.assertNotEqual(self.q[qid].rework_query, self.q[qid].query)
+
+
+class TechnologyReworkGraphTests(unittest.TestCase):
+    def test_supervisor_sends_insufficient_criteria_back_to_real_technology_node(self):
+        import re
+        import logging
+        from agents.technology import REWORK_K
+        from core import graph as graph_module
+        from documents.profiles import load_company_profiles
+        from evaluation.criteria import TECH
+        from tests.test_supervisor import Workers
+
+        logging.disable(logging.CRITICAL)
+        self.addCleanup(logging.disable, logging.NOTSET)
+        companies = ["Figure AI", "Apptronik"]
+        docs = {"Figure AI": document(), "Apptronik": document("A1", company="apptronik")}
+        prompts = []
+
+        def respond(messages, config=None):
+            prompt = messages[1][1]
+            prompts.append(prompt)
+            doc = docs[re.search(r"현재 기업: (.+)", prompt).group(1).strip()]
+            return analysis(doc) if "[최종 기술 분석]" in prompt else review(doc)
+
+        llm = Mock()
+        llm.invoke.side_effect = respond
+        search = Mock(side_effect=lambda query, company, k: [docs[company]])
+        workers = Workers(missing={"Figure AI": ("B04", "B09", "H11", "H12")})
+        others = {name: node for name, node in workers.nodes().items() if name != TECH}
+        with patch("agents.technology.search_technology", search), \
+                patch("agents.technology.get_structured_llm", return_value=llm), \
+                patch.dict(graph_module.WORKER_NODES, others):
+            state = graph_module.build_graph().invoke(
+                {"candidate_companies": companies, "company_profiles": load_company_profiles()},
+                config={"recursion_limit": graph_module.recursion_limit(2)},
+            )
+
+        self.assertEqual(state["status"], "SUCCESS")
+        self.assertEqual(state["rework_counts"].get("Figure AI:technology"), 1)
+        rework_prompts = [p for p in prompts if "[Supervisor 재작업 요청]" in p]
+        self.assertTrue(rework_prompts)
+        self.assertTrue(all("현재 기업: Figure AI" in p and "B04, B09, H11, H12" in p for p in rework_prompts))
+        wide = {c.args[1] for c in search.call_args_list if c.kwargs.get("k") == REWORK_K}
+        self.assertEqual(wide, {"Figure AI"})  # 재작업 검색은 근거가 부족한 기업만
+        self.assertEqual(len(state["technology_results"]["Figure AI"]["findings"]), len(QUESTIONS))
+
+
+class TechnologyQuotePunctuationTests(unittest.TestCase):
+    """원문의 둥근 따옴표·대시와 LLM의 곧은 따옴표 차이로 올바른 인용을 버리지 않는다."""
+
+    def run_quote(self, quote):
+        doc = document(text="Figure’s robot demonstrated sorting parts in a controlled test — “safely”.")
+        with patch("agents.technology.search_technology", return_value=[doc]), \
+                patch("agents.technology.get_structured_llm") as factory:
+            factory.return_value.invoke.side_effect = [review(doc), draft(doc, quote, ["product"])]
+            return technology_node({"current_company": "Figure AI"})["technology_results"]["Figure AI"]
+
+    def test_straight_punctuation_quote_matches_typographic_original(self):
+        result = self.run_quote('Figure\'s robot demonstrated sorting parts in a controlled test - "safely".')
+        self.assertEqual([e["chunk_id"] for e in result["evidence"]], ["F1_P02_C01"])
+        self.assertFalse(any("인용문이 원문에 없음" in m for m in result["missing_information"]))
+
+    def test_changed_words_are_still_rejected(self):
+        result = self.run_quote("Figure's robot demonstrated sorting boxes in a controlled test.")
+        self.assertEqual(result["evidence"], [])
+        self.assertTrue(any("인용문이 원문에 없음" in m for m in result["missing_information"]))
+
+
 if __name__ == "__main__":
     unittest.main()

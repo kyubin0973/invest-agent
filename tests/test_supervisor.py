@@ -4,6 +4,8 @@ import logging
 import unittest
 from unittest.mock import patch
 
+from langgraph.checkpoint.memory import InMemorySaver
+
 from agents import supervisor
 from agents.supervisor import COMPETITION, FINISH, JUDGE, QUALITY, REPORT
 from core import graph as graph_module
@@ -199,6 +201,57 @@ class SupervisorGraphTests(unittest.TestCase):
         self.assertEqual(len(workers.calls), 4)
         self.assertEqual(state["status"], "FAILED")
         self.assertEqual(state["next"], FINISH)
+
+
+class ProcessKilled(BaseException):
+    """프로세스가 중간에 죽은 상황. Exception이 아니므로 하위 Agent 실패 처리에 잡히지 않고 실행이 끊긴다."""
+
+
+class ResumeTests(unittest.TestCase):
+    def setUp(self):
+        logging.disable(logging.CRITICAL)
+        self.addCleanup(logging.disable, logging.NOTSET)
+
+    def test_interrupted_run_resumes_from_checkpoint_without_repeating_finished_work(self):
+        workers = Workers(missing={"A": ("B01", "B03", "B05", "B07")})
+        nodes = workers.nodes()
+        competition, killed = nodes[COMPETITION], []
+
+        def crash_once(state):
+            if not killed:
+                killed.append(True)
+                raise ProcessKilled()
+            return competition(state)
+
+        nodes[COMPETITION] = crash_once
+        config = {
+            "recursion_limit": graph_module.recursion_limit(len(COMPANIES)),
+            "configurable": {"thread_id": "trace-1"},
+        }
+        with patch.dict(graph_module.WORKER_NODES, nodes):
+            graph = graph_module.build_graph(checkpointer=InMemorySaver())
+            inputs = {"candidate_companies": COMPANIES, "company_profiles": PROFILES, "trace_id": "trace-1"}
+            with self.assertRaises(ProcessKilled):
+                graph.invoke(inputs, config=config)
+
+            # 중단 시점: 분석 4건은 Checkpoint에 남아 있고, 다음 할 일은 Competition이다
+            saved = graph.get_state(config)
+            self.assertEqual(saved.next, (COMPETITION,))
+            self.assertEqual(saved.values["step_count"], 5)
+            self.assertEqual(set(saved.values["technology_results"]), set(COMPANIES))
+            done_before = list(workers.calls)
+
+            # 같은 thread_id로 입력 없이 다시 실행하면 중단된 노드부터 이어진다
+            state = graph.invoke(None, config=config)
+
+        self.assertEqual(state["status"], "SUCCESS")
+        self.assertEqual(state["trace_id"], "trace-1")
+        self.assertEqual(workers.calls[:len(done_before)], done_before)
+        analysis_calls = [c for c in workers.calls if c[0] in (TECH, MARKET) and not c[2]]
+        self.assertEqual(len(analysis_calls), 2 * len(COMPANIES))  # 끝난 분석은 다시 하지 않는다
+        self.assertEqual(state["rework_counts"], {f"A:{MARKET}": 1})  # 재개 후에도 재작업 판단이 이어진다
+        self.assertEqual(state["step_count"], len(workers.calls))
+        self.assertEqual(state["errors"], [])
 
 
 if __name__ == "__main__":

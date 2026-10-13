@@ -220,8 +220,9 @@ def decide(state: InvestmentState) -> Decision:
 @traceable(name="supervisor_decision")
 def record_decision(trace_id: str, step: int, next: str, company: str | None, reason: str) -> dict:
     """결정 로그는 State가 아니라 외부(logger, LangSmith)에 남긴다. trace_id로 State와 잇는다."""
-    logger.info("[%s] step=%d next=%s company=%s reason=%s", trace_id, step, next, company or "-", reason)
-    return {"trace_id": trace_id, "step": step, "next": next, "company": company, "reason": reason}
+    ts = now()
+    logger.info("%s [%s] step=%d next=%s company=%s reason=%s", ts, trace_id, step, next, company or "-", reason)
+    return {"trace_id": trace_id, "ts": ts, "step": step, "next": next, "company": company, "reason": reason}
 
 
 def supervisor_node(state: InvestmentState) -> dict:
