@@ -925,5 +925,34 @@ class TechnologyFinalRuleTests(unittest.TestCase):
         self.assertTrue(any("E2에 필요한" in m for m in result["missing_information"]))
 
 
+class TechnologyTrailingPeriodBoundaryTests(unittest.TestCase):
+    """2b4d61c 검토: 끝 마침표를 뗀 인용이 원문의 단어·숫자 중간에서 끝나면 거부한다."""
+
+    def test_truncated_number_or_word_prefix_is_rejected(self):
+        from agents.technology import _quote_in_source
+        source = "The robot completed 100 tasks."
+        self.assertFalse(_quote_in_source("The robot completed 10.", source))   # 100 → 10 숫자 자르기
+        self.assertFalse(_quote_in_source("The robot comp.", source))           # 단어 앞부분만
+        self.assertTrue(_quote_in_source("The robot completed 100 tasks.", source))  # 원문 그대로
+
+    def test_real_title_trailing_period_still_accepted(self):
+        from agents.technology import _quote_in_source
+        title = TechnologyFinalRuleTests.A5_TITLE
+        self.assertTrue(_quote_in_source(TechnologyFinalRuleTests.QUOTE, title))
+        self.assertTrue(_quote_in_source("Gemini Robotics 2 brings whole body intelligence to robots.",
+                                         "Gemini Robotics 2 brings whole body intelligence to robots — Google DeepMind"))
+        self.assertFalse(_quote_in_source("Apptronik and Jabil Collaborate to Scale Production of Apollo Humanoid Rob.",
+                                          title))
+
+    def test_same_boundary_rule_on_broken_ligature_path(self):
+        from agents.technology import _quote_in_source
+        source = "Other speci\x00c tasks used 100 units."
+        self.assertTrue(_quote_in_source("Other specific tasks.", source))      # 합자 복구 + 단어 끝에서 마침표
+        self.assertTrue(_quote_in_source("Other specific tasks used 100 units.", source))
+        self.assertFalse(_quote_in_source("Other specific tasks used 10.", source))  # 숫자 자르기
+        self.assertFalse(_quote_in_source("Other speci.", source))              # 깨진 합자 앞에서 단어 자르기
+        self.assertFalse(_quote_in_source("Other specific ta.", source))
+
+
 if __name__ == "__main__":
     unittest.main()

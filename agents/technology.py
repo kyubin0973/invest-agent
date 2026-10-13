@@ -136,18 +136,36 @@ _BROKEN = "\ufffd"  # 원문에서 합자가 깨진 자리 표시 (제어문자 
 _LIGATURES = ("ffi", "ffl", "ff", "fi", "fl")
 
 
-def _match_from(source: str, i: int, quote: str, j: int) -> bool:
-    """source[i:]가 quote[j:]로 시작하는지. 원문의 깨진 자리에서만 합자 글자열을 대응시킨다."""
+def _ends_at_boundary(text: str, end: int) -> bool:
+    """일치가 끝난 다음 글자가 단어·숫자의 일부가 아닌지 (깨진 합자 자리도 단어의 일부로 본다)."""
+    return end >= len(text) or not (text[end].isalnum() or text[end] == _BROKEN)
+
+
+def _match_from(source: str, i: int, quote: str, j: int, bounded: bool = False) -> bool:
+    """source[i:]가 quote[j:]로 시작하는지. 원문의 깨진 자리에서만 합자 글자열을 대응시킨다.
+
+    bounded=True면 일치가 끝난 위치가 단어·숫자 중간이 아니어야 한다 (끝 마침표를 뗀 후보용).
+    """
     while j < len(quote):
         if i >= len(source):
             return False
         if source[i] == _BROKEN:
-            return any(quote.startswith(lig, j) and _match_from(source, i + 1, quote, j + len(lig))
+            return any(quote.startswith(lig, j) and _match_from(source, i + 1, quote, j + len(lig), bounded)
                        for lig in _LIGATURES)
         if source[i] != quote[j]:
             return False
         i, j = i + 1, j + 1
-    return True
+    return not bounded or _ends_at_boundary(source, i)
+
+
+def _found(text: str, candidate: str, bounded: bool) -> bool:
+    """candidate가 text의 연속 구절인지. bounded=True면 끝 위치가 단어·숫자 중간인 일치는 제외한다."""
+    start = text.find(candidate)
+    while start >= 0:
+        if not bounded or _ends_at_boundary(text, start + len(candidate)):
+            return True
+        start = text.find(candidate, start + 1)
+    return False
 
 
 def _quote_in_source(quote: str, source: str) -> bool:
@@ -158,21 +176,24 @@ def _quote_in_source(quote: str, source: str) -> bool:
        (예: 원문 "speci\\x00c" ↔ 인용 "specific"). 다른 위치의 글자는 그대로 비교하므로
        단어가 바뀐 인용(예: 원문 "file" ↔ 인용 "flle")은 거부된다. 합자가 아닌 빠진 글자는 복원하지 않는다.
     3) 인용 맨 끝의 마침표 한 개 차이만 허용한다 (예: 제목 "… Operations" ↔ 인용 "… Operations.").
+       이때 일치가 끝난 위치가 단어·숫자 중간이면 거부한다 (합자 복구 경로도 동일).
     """
     normalized = _normalize_quote(quote)
     if not normalized:
         return False
-    candidates = [normalized]
+    candidates = [(normalized, False)]
     if normalized.endswith(".") and normalized[:-1].strip():
-        # 3) 원문 제목처럼 마침표가 없는 구절에 LLM이 붙인 맨 끝 마침표 한 개만 허용한다. 단어·숫자는 그대로 비교.
-        candidates.append(normalized[:-1])
+        # 3) 원문 제목처럼 마침표가 없는 구절에 LLM이 붙인 맨 끝 마침표 한 개만 허용한다.
+        #    단, 마침표를 뗀 후보는 원문에서 단어·숫자가 끝나는 자리와 일치해야 한다
+        #    (원문 "completed 100 tasks" ↔ 인용 "completed 10." 같은 숫자·단어 자르기 거부).
+        candidates.append((normalized[:-1], True))
     plain = _normalize_quote(source)
-    if any(c in plain for c in candidates):
+    if any(_found(plain, c, bounded) for c, bounded in candidates):
         return True
     if "\x00" not in source:
         return False
     marked = _normalize_quote(source.replace("\x00", _BROKEN))
-    return any(_match_from(marked, i, c, 0) for c in candidates
+    return any(_match_from(marked, i, c, 0, bounded) for c, bounded in candidates
                for i in range(len(marked)) if marked[i] in (c[0], _BROKEN))
 
 
