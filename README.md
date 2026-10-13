@@ -46,7 +46,7 @@
 
 ## Agents
 - Supervisor : State를 읽어 다음에 부를 Agent 하나를 결정. 근거 충분성 평가, 재작업 요청, 실패 재시도·제외, 종료 판단을 담당. LLM을 쓰지 않는 규칙 기반 판단이라 같은 State면 같은 결정을 냄
-- Technology & Product Agent : 기업 기술자료를 검색해 제품·AI·자율성·신뢰성·안전 등 기술 성숙도 분석
+- Technology & Product Agent : 기업 기술자료를 8개 하위 질문으로 검색해 제품·AI·자율성·신뢰성·안전·생산 등 기술 성숙도 분석. 인용문을 원문과 대조해 검증된 근거만 전달. 재작업 요청 시 부족 문항에 해당하는 질문만 다른 관점·넓은 범위로 재검색하고, 품질 평가가 지적한 문장은 제외한 뒤 기존 결과와 병합
 - Market & Traction Agent : 공통 시장 보고서와 기업 자료를 나눠 검색해 시장 규모, 고객 배치·계약, 사업모델, 팀, 제조·Fleet 운영 분석
 - Competition Agent : 모든 후보의 분석 결과를 비교해 Target Market 맥락, 차별성, 상대 Risk 정리
 - Investment Judge Agent : 분석 근거로 12개 문항을 채점하고, Python 규칙으로 최종 점수와 투자 판정 확정
@@ -158,7 +158,7 @@ uv run python app.py                 # 전체 실행 → reports/investment_repo
 
 ## Contributors
 - 김규빈 : Supervisor 설계, LangGraph 그래프, State Schema
-- 박진근 :
+- 박진근 : Technology & Product Agent (기술 RAG·근거 검증), 원문 인용 검증, Supervisor 재작업 대응 (부족 문항별 재검색·결과 병합)
 - 윤서진 :
 - 정지우 :
 - 강지훈 :
