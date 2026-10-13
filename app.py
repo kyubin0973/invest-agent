@@ -36,8 +36,9 @@ def save_run(graph, config: dict, final_state: dict, stamp: str) -> tuple[Path, 
     for snapshot in reversed(list(graph.get_state_history(config))):  # 오래된 것부터
         values = snapshot.values
         attempt, quality = values.get("report_attempts"), values.get("quality_result")
-        # 품질 평가 노드가 막 끝난 시점(다음 차례가 Supervisor)의 결과만 모은다
-        if quality and values.get("next") == "quality_evaluator" and snapshot.next == ("supervisor",):
+        # 품질 평가 노드가 막 끝난 시점(다음 차례가 Supervisor)의 결과만 모은다. 실패한 회차는 결과가 없으므로 건너뛴다
+        finished = (values.get("node_status") or {}).get("quality_evaluator") == "DONE"
+        if quality and finished and values.get("next") == "quality_evaluator" and snapshot.next == ("supervisor",):
             rounds[attempt] = ({
                 "report_attempt": attempt,
                 "passed": quality.get("passed"),
