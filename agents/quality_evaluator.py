@@ -31,6 +31,8 @@ from evaluation.report_quality_sources import load_original_documents
 # 위 원본 주석을 보존한다. 원본 TODO의 세 검사는 이제 Hybrid QA 결과를 반환한다.
 # 공통 결과는 한 번만 평가하고 _check_*에 전달하므로 Judge를 세 번 호출하지 않는다.
 # 상세 판정은 QA 내부·trace에만 보존하고 공통 State에는 기존 필드만 반환한다.
+# 원본 중립성 설명을 보존하며 실제 정책은 기술 추천·우열 결론을 근거 유무와
+# 관계없이 금지한다. 투자 결과 검증과 기술 추천의 경계는 QA 전용 정책에 명시한다.
 
 
 def _check_groundedness(state: InvestmentState, *, _evaluation: dict | None = None,
@@ -100,7 +102,11 @@ def evaluate_report_details(state: InvestmentState, *, original_documents: dict 
 
 
 def evaluate_report(state: InvestmentState, *, original_documents: dict | None = None, judge=None) -> QualityResult:
-    """기존 공통 QualityResult만 반환하며 상세 결과는 별도 QA 함수·trace에 둔다."""
+    """기존 공통 QualityResult만 반환한다. 상세 결과는 별도 QA 함수·trace에 둔다.
+
+    버전/hash 상세 검증에는 evaluate_report_details()를 사용한다. 두 함수는 각자
+    평가를 실행하므로 같은 보고서에 연달아 호출해 Judge 비용을 중복시키지 않는다.
+    """
     return to_common_result(evaluate_report_details(state, original_documents=original_documents, judge=judge))
 
 

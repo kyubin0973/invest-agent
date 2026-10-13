@@ -85,6 +85,7 @@ def fingerprint(value: object) -> str:
 
 
 def report_identity(state: dict) -> tuple[int | str | None, str]:
+    """독립 QA의 작성 차수와 실제 본문 hash. 공통 State 필드를 추가하지 않는다."""
     version = state.get("report_version", state.get("report_attempts"))
     report = state.get("final_report")
     return version, sha256((report if isinstance(report, str) else "").encode()).hexdigest()
@@ -97,7 +98,13 @@ def context_fingerprint(state: dict) -> str:
 
 
 def result_is_current(state: dict, result: dict | None = None, *, original_documents: dict | None = None) -> bool:
-    """Integration hook: current does not mean passed. Supervisor checks both."""
+    """독립 QA 상세 결과의 버전·본문·근거가 현재 입력과 일치하는지 검사한다.
+
+    evaluate_report_details()의 결과를 result에 전달한다. 유효성은 합격과 다르다.
+    공통 evaluate_report()/quality_result에는 hash metadata가 없으므로 그 결과만
+    전달하면 False다. Supervisor의 QA 무효화·재검사 제어를 대신하지 않는다.
+    original_documents를 전달하면 실제 원문 입력 fingerprint도 비교한다.
+    """
     result = result if result is not None else state.get("quality_result")
     version, digest = report_identity(state)
     current = bool(result and state.get("final_report") and version is not None
