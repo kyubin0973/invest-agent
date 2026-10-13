@@ -99,8 +99,7 @@ class ReportModelTest(unittest.TestCase):
 
 
 try:
-    # judge_used 같은 상세 결과는 evaluate_report_details가 반환한다 (evaluate_report는 공통 형식만)
-    from agents.quality_evaluator import evaluate_report_details as evaluate_report
+    from agents.quality_evaluator import evaluate_report_details as evaluate_report  # 상세 결과(judge_used 포함)
     from tests.qa_fixtures import passing_judge
 except ImportError:  # 품질 평가 코드가 아직 없는 브랜치
     evaluate_report = None
