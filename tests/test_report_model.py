@@ -149,6 +149,18 @@ class RewriteTest(unittest.TestCase):
         self.assertIn("점수 3.00 < 기준", out["final_report"])
         self.assertIn("Final Score", out["final_report"])
 
+    def test_uncitable_statement_kept_for_citation_only_issue(self):
+        """강점처럼 인용을 붙일 수 없는 서술은 '인용 누락' 지적으로는 지우지 않고, 다른 사유면 지운다."""
+        def issue(reason):
+            q = quality("강점")
+            q["checks"][0]["issues"][0]["reason"] = reason
+            return q
+        model, notes = apply_quality_feedback(build_report_model(state()), issue("수치 또는 근거 기반 분석 문장에 인용이 없습니다."))
+        self.assertEqual(model.omitted, {})
+        self.assertEqual(len(notes), 1)
+        model, _ = apply_quality_feedback(build_report_model(state()), issue("근거 없는 단정 표현"))
+        self.assertIn("summary:Alpha:strengths", model.omitted)
+
     def test_unmatched_issue_is_reported_not_fatal(self):
         model, unmatched = apply_quality_feedback(build_report_model(state()), quality("보고서에 없는 완전히 다른 문장입니다"))
         self.assertEqual(len(unmatched), 1)

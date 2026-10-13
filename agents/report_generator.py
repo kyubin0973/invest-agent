@@ -404,15 +404,21 @@ def apply_quality_feedback(model: ReportModel, quality: dict | None) -> tuple[Re
         for issue in check.get("issues", []):
             if issue.get("owner") != "report_generator":
                 continue
-            hits = [s for s in model.statements if _same_statement(s.text, issue.get("statement"))]
+            company = issue.get("company")  # 지적에 기업이 있으면 그 기업의 문장만 대상 (다른 기업의 같은 문구는 건드리지 않는다)
+            hits = [s for s in model.statements
+                    if _same_statement(s.text, issue.get("statement")) and (not company or s.company in (None, company))]
             if not hits:
                 unmatched.append(f"[{check.get('item')}] {issue.get('statement')}")
                 continue
-            removable = [s for s in hits if not s.protected]
-            if not removable:  # 판정 사유 같은 계산 결과: 지우지 않고 기록만 남긴다
-                unmatched.append(f"[{check.get('item')}] 계산 결과(판정 사유)라 제외하지 않음: {issue.get('statement')}")
+            reason = str(issue.get("reason") or "")
+            # 판정 사유는 계산 결과, 강점·리스크 같은 서술은 애초에 인용을 붙일 수 없다 → '인용 누락' 지적만으로는 지우지 않는다
+            keep = [s for s in hits if s.protected or (s.kind != ANALYSIS and "인용" in reason)]
+            removable = [s for s in hits if s not in keep]
+            for s in keep:
+                unmatched.append(f"[{check.get('item')}] 계산 결과·인용 불가 서술이라 제외하지 않음({s.id}): {reason}")
             for s in removable:
                 omitted[s.id] = check.get("item", "")
+                logger.info("품질 평가 지적으로 제외: %s [%s] 사유=%s / %s", s.id, check.get("item"), reason, _short(s.text, 60))
     return replace(model, omitted=omitted), unmatched
 
 
