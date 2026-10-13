@@ -30,7 +30,7 @@ from langchain_core.documents import Document
 from pydantic import BaseModel, Field
 
 from core.llm import get_structured_llm
-from core.state import AnalysisResult, EvidenceItem, Finding, InvestmentState
+from core.state import AnalysisResult, EvidenceItem, Finding, InvestmentState, ReworkRequest
 from documents.company import company_key
 from prompts.common import CITATION_RULES, EVIDENCE_RULES, build_system_prompt, build_user_prompt, format_documents
 from prompts.market_traction import (
@@ -43,6 +43,7 @@ from prompts.market_traction import (
     sufficiency_request,
 )
 from rag.retriever import search, search_industry, to_evidence
+
 
 MARKET_K = 3  # 공통 시장자료: 여러 하위 질문에서 겹치므로 적게
 COMPANY_K = 4  # 기업 자료: 일반 검색
@@ -300,9 +301,11 @@ def _merge(base: AnalysisResult, extra: AnalysisResult) -> AnalysisResult:
 # ---------------------------------------------------------------------------
 # 노드
 # ---------------------------------------------------------------------------
-def analyze_market_traction(company: str, profile: dict) -> AnalysisResult:
+def analyze_market_traction(company: str, profile: dict, rework_request: ReworkRequest | None = None) -> AnalysisResult:
     key = company_key(company)
     market = SEARCH_MARKET
+
+    rework_note = _build_rework_note(rework_request)
 
     # 2. 검색
     docs: dict[str, Document] = {}
@@ -318,7 +321,7 @@ def analyze_market_traction(company: str, profile: dict) -> AnalysisResult:
     # 3. 충분성 판단 (LLM 1회)
     check = get_structured_llm(SufficiencyResult).invoke(
         [("system", system),
-         ("user", build_user_prompt(format_documents(list(docs.values())), sufficiency_request(company, questions)))],
+         ("user", build_user_prompt(format_documents(list(docs.values())), sufficiency_request(company, questions) + rework_note))],
         config={"run_name": "market_sufficiency_check"},
     )
 
@@ -347,7 +350,7 @@ def analyze_market_traction(company: str, profile: dict) -> AnalysisResult:
             gaps += [f"{q['id']}: {a}" for a in c.missing_aspects]
 
     # 5. 분석 (LLM 1회) + 6. 검증 (코드)
-    result, answered = _validate(_analyze(company, profile, questions, gaps, docs, system), docs, key)
+    result, answered = _validate(_analyze(company, profile, questions, gaps, docs, system, rework_note=rework_note), docs, key)
 
     # 5-1. 보완 분석 (LLM 최대 1회): finding이 빠진 하위 질문만 다시 분석한다.
     #      시장 질문은 공통 시장자료로 항상 답할 수 있으므로 모두 대상, 기업 질문은 충분성을 통과한 것만 대상.
@@ -359,7 +362,7 @@ def analyze_market_traction(company: str, profile: dict) -> AnalysisResult:
     if retry:
         retry_docs = {c: docs[c] for q in retry for c in q["chunk_ids"]}
         extra, extra_answered = _validate(
-            _analyze(company, profile, retry, gaps, retry_docs, system, run_name="market_analysis_retry"), docs, key
+            _analyze(company, profile, retry, gaps, retry_docs, system, rework_note=rework_note, run_name="market_analysis_retry"), docs, key
         )
         result = _merge(result, extra)
         answered |= extra_answered
@@ -379,6 +382,7 @@ def _analyze(
     gaps: list[str],
     docs: dict[str, Document],
     system: str,
+    rework_note: str = "",
     run_name: str = "market_analysis",
 ) -> MarketAnalysisOut:
     for q in questions:
@@ -387,7 +391,7 @@ def _analyze(
         [("system", system),
          ("user", build_user_prompt(
              format_documents(list(docs.values())),
-             analysis_request(company, profile.get("target_market"), questions, gaps),
+             analysis_request(company, profile.get("target_market"), questions, gaps) + rework_note,
              EVIDENCE_RULES, CITATION_RULES, MARKET_RULES,
          ))],
         config={"run_name": run_name},
@@ -434,5 +438,26 @@ def _ground(result: AnalysisResult, docs: dict[str, Document], company: str, sys
 
 def market_traction_node(state: InvestmentState) -> dict:
     company = state["current_company"]
-    result = analyze_market_traction(company, state["company_profiles"][company])
+    rework_request = state.get("rework_request")
+    result = analyze_market_traction(company, state["company_profiles"][company], rework_request=rework_request)
     return {"market_traction_results": {company: result}, "market_traction_done": True}
+
+
+def _build_rework_note(rework_request: ReworkRequest | None) -> str:
+    if not rework_request:
+        return ""
+
+    criterion_text = ", ".join(rework_request["criterion_ids"]) or "없음"
+    feedback_text = "\n".join(
+        f"- {item}" for item in rework_request["feedback"]
+    ) or "- 없음"
+
+    return f"""
+[Supervisor 재작업 요청]
+- 부족한 평가 문항: {criterion_text}
+- 재작업 사유: {rework_request["reason"]}
+- 품질 평가 피드백:
+{feedback_text}
+
+위 재작업 요청을 특히 보완하라.
+"""
