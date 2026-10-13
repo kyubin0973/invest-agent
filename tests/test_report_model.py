@@ -1,5 +1,6 @@
 """Report Generator: 문장 단위 모델, 인용, 품질 평가 지적 반영(재작성)"""
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -105,8 +106,18 @@ except ImportError:  # 품질 평가 코드가 아직 없는 브랜치
     evaluate_report = None
 
 
+class InTempDir(unittest.TestCase):
+    """report_generator_node는 현재 폴더의 reports/에 PDF를 쓴다. 테스트가 실제 실행 결과 PDF를 덮어쓰지 않도록 임시 폴더에서 돌린다."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(tmp.name)
+
+
 @unittest.skipIf(evaluate_report is None, "품질 평가(feat/qa) 코드가 없는 브랜치")
-class QualityContractTest(unittest.TestCase):
+class QualityContractTest(InTempDir):
     def test_report_passes_deterministic_quality_rules(self):
         """실제 품질 평가의 결정적 검사(인용 형식·REFERENCE·수치 인용)가 보고서에서 막히지 않는다 (Judge는 통과 응답 주입)."""
         s = state()
@@ -122,7 +133,7 @@ class QualityContractTest(unittest.TestCase):
         self.assertTrue(groundedness["passed"], groundedness["issues"])
 
 
-class RewriteTest(unittest.TestCase):
+class RewriteTest(InTempDir):
     def test_report_generator_issue_omits_statement_everywhere(self):
         s = state(report_attempts=2, quality_result=quality("T-Alpha 가장 우수하다고 단정하는 서술입니다"))
         out = report_generator_node(s)
