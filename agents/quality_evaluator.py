@@ -1,51 +1,47 @@
-"""Report Quality Evaluator (보고서 품질 평가)
+"""5번 Hybrid QA node. Routing, counters and final status belong to Supervisor.
 
-보고서 작성 뒤 Supervisor가 호출한다. 평가 결과가 미달이면 Supervisor가 Report Generator에
-재작성을 요청한다 (재작성 횟수 상한은 Supervisor가 관리).
-
-입력: final_report, references, technology_results, market_traction_results, competition_result, investment_results
-출력: quality_result (QualityResult)
-
-평가 항목:
-- groundedness : 보고서의 주장이 검색된 출처(REFERENCE)로 추적되는가
-- neutrality   : 근거 없는 우열·추천 표현이 없는가
-- bias_control : 단일 출처나 기업에 유리한 근거에만 치우치지 않았는가
-
-미달 지적(QualityIssue)에는 수정할 담당(owner)을 적는다. Supervisor가 이 값으로 되돌려 보낼 곳을 정한다.
-- owner가 technology / market_traction : 분석 근거 자체의 문제. company를 함께 적으면 그 Agent가 재작업한다.
-- owner가 report_generator            : 서술·표현의 문제. 보고서만 다시 쓴다.
-
-TODO: 아래 _check_* 함수는 자리만 잡아 둔 것이다. 항목별 검사를 구현하면 된다.
-      `passed`는 LLM이 아니라 이 모듈의 Python 규칙으로 계산한다.
+Extra nested result fields are QA-local pending State-owner agreement. Original
+documents are injected into the standalone evaluator, not read from an invented
+shared State field. The current placeholder fails without calling a paid API.
 """
 
-from core.state import InvestmentState, QualityCheck, QualityResult
+from langsmith import traceable
+
+from core.state import InvestmentState
+from evaluation.report_quality import evaluate, redact_secrets, report_identity, result_is_current
 
 
-def _check_groundedness(state: InvestmentState) -> QualityCheck:
-    return {"item": "groundedness", "passed": True, "issues": []}
+def _trace_input(inputs: dict) -> dict:
+    state = inputs.get("state") or {}
+    version, digest = report_identity(state)
+    ids = set()
+    for key in ("technology_results", "market_traction_results"):
+        for analysis in (state.get(key) or {}).values():
+            ids.update((e.get("source_id"), e.get("chunk_id")) for e in analysis.get("evidence", []))
+    for result in (state.get("investment_results") or {}).values():
+        for criterion in result.get("criteria", []):
+            ids.update((e.get("source_id"), e.get("chunk_id")) for e in criterion.get("evidence", []))
+    return redact_secrets({"trace_id": state.get("trace_id"), "report_version": version, "report_hash": digest,
+                           "evidence_ids": [{"source_id": s, "chunk_id": c} for s, c in sorted(ids, key=str)]})
 
 
-def _check_neutrality(state: InvestmentState) -> QualityCheck:
-    return {"item": "neutrality", "passed": True, "issues": []}
+def _trace_output(output: dict) -> dict:
+    # Do not duplicate the report or originals in QA traces.
+    if not isinstance(output, dict):
+        return {"error": "QA evaluation failed"}
+    return redact_secrets({**output, "feedback": [], "checks": [
+        {**check, "issues": [{k: v for k, v in issue.items() if k != "statement"}
+                             for issue in check["issues"]]} for check in output["checks"]]})
 
 
-def _check_bias_control(state: InvestmentState) -> QualityCheck:
-    return {"item": "bias_control", "passed": True, "issues": []}
-
-
-def evaluate_report(state: InvestmentState) -> QualityResult:
-    checks = [_check_groundedness(state), _check_neutrality(state), _check_bias_control(state)]
-    return {
-        "passed": all(c["passed"] for c in checks),
-        "checks": checks,
-        "feedback": [
-            f"[{c['item']}] {issue['statement']} — {issue['reason']}"
-            for c in checks if not c["passed"]
-            for issue in c["issues"] if issue["owner"] == "report_generator"
-        ],
-    }
+@traceable(name="report_quality_evaluation", process_inputs=_trace_input, process_outputs=_trace_output)
+def evaluate_report(state: InvestmentState, *, original_documents: dict | None = None, judge=None) -> dict:
+    return evaluate(state, original_documents=original_documents, judge=judge)
 
 
 def quality_evaluator_node(state: InvestmentState) -> dict:
+    # Exceptions reach the existing worker boundary; no failed Judge becomes a pass.
     return {"quality_result": evaluate_report(state)}
+
+
+__all__ = ["evaluate_report", "quality_evaluator_node", "result_is_current"]
