@@ -5,7 +5,10 @@ import os
 import unittest
 from unittest.mock import Mock, patch
 
-from agents.quality_evaluator import _trace_input, _trace_output, evaluate_report, quality_evaluator_node
+from agents.quality_evaluator import (
+    _check_bias_control, _check_groundedness, _check_neutrality,
+    _trace_input, _trace_output, evaluate_report, quality_evaluator_node,
+)
 from evaluation.report_quality import QualityJudgeError, evaluate, prepare_input, redact_secrets, result_is_current
 from prompts.report_quality import SYSTEM_PROMPT, build_quality_messages
 from tests.qa_fixtures import EXAGGERATED, NORMAL, SUPERIOR, fixture, issue_judge, passing_judge
@@ -29,6 +32,45 @@ class ReportQualityTests(unittest.TestCase):
         self.assertTrue(result["judge_used"])
         self.assertEqual(judge.call_count, 1)
         self.assertTrue(result_is_current(self.state, result, original_documents=self.originals))
+
+    def test_original_check_functions_return_their_matching_criterion(self):
+        for check, item in ((_check_groundedness, "groundedness"),
+                            (_check_neutrality, "neutrality"), (_check_bias_control, "bias_control")):
+            with self.subTest(item=item):
+                result = check(self.state, original_documents=self.originals, judge=passing_judge)
+                self.assertEqual(result["item"], item)
+                self.assertTrue(result["passed"])
+
+    def test_original_state_only_check_calls_remain_valid_and_fail_closed(self):
+        for check in (_check_groundedness, _check_neutrality, _check_bias_control):
+            with self.subTest(check=check.__name__):
+                self.assertFalse(check(self.state)["passed"])
+
+    def test_evaluate_report_reuses_one_judge_result_for_three_checks(self):
+        judge = Mock(side_effect=passing_judge)
+        result = evaluate_report(self.state, original_documents=self.originals, judge=judge)
+        self.assertTrue(result["passed"])
+        judge.assert_called_once()
+        self.assertEqual([c["item"] for c in result["checks"]], ["groundedness", "neutrality", "bias_control"])
+
+    def test_evaluate_report_actually_calls_original_check_functions(self):
+        from agents import quality_evaluator as node
+        with (patch.object(node, "_check_groundedness", wraps=_check_groundedness) as grounded,
+              patch.object(node, "_check_neutrality", wraps=_check_neutrality) as neutral,
+              patch.object(node, "_check_bias_control", wraps=_check_bias_control) as bias):
+            result = evaluate_report(self.state, original_documents=self.originals, judge=passing_judge)
+        self.assertTrue(result["passed"])
+        for check in (grounded, neutral, bias):
+            check.assert_called_once()
+
+    def test_original_checks_preserve_actionable_failed_judge_verdict(self):
+        for check, item in ((_check_groundedness, "groundedness"),
+                            (_check_neutrality, "neutrality"), (_check_bias_control, "bias_control")):
+            with self.subTest(item=item):
+                result = check(self.state, original_documents=self.originals,
+                               judge=issue_judge(item, "수정 필요한 실제 항목"))
+                self.assertFalse(result["passed"])
+                self.assertTrue(result["issues"][0]["requested_fix"])
 
     def test_placeholder_fails_without_paid_call(self):
         judge = Mock(side_effect=AssertionError("must not call"))
