@@ -43,7 +43,7 @@ def run_quality(state: dict, originals: dict, *, live: bool = False) -> dict:
                     "issues": issues, "missing_information": limitations,
                     "next_step": "입력 점검 완료. 실제 의미 평가는 --live로 별도 실행하세요."
                                  if not issues else "보고서·원문 입력을 먼저 보완하세요."}
-        # 입력 규칙 실패는 evaluator가 불합격으로 반환하며 API를 호출하지 않는다.
+        # 실제 본문이 있으면 규칙 지적과 Judge 의미 평가를 함께 실행한다.
         return {"mode": "live", **evaluate_report(state, original_documents=originals)}
     except QualityJudgeError as exc:
         return {"mode": "live" if live else "input_check", "passed": False,

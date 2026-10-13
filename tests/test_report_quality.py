@@ -44,7 +44,11 @@ class ReportQualityTests(unittest.TestCase):
     def test_original_state_only_check_calls_remain_valid_and_fail_closed(self):
         for check in (_check_groundedness, _check_neutrality, _check_bias_control):
             with self.subTest(check=check.__name__):
-                self.assertFalse(check(self.state)["passed"])
+                with patch("core.llm.get_structured_llm") as factory:
+                    factory.return_value.invoke.return_value = passing_judge(prepare_input(self.state)[0])
+                    result = check(self.state)
+                self.assertEqual(result["passed"], check is not _check_groundedness)
+                factory.return_value.invoke.assert_called_once()
 
     def test_evaluate_report_reuses_one_judge_result_for_three_checks(self):
         judge = Mock(side_effect=passing_judge)
@@ -98,6 +102,9 @@ class ReportQualityTests(unittest.TestCase):
             "| Figure AI | INVEST | 3.22 | 12/12 (100%) |",
             "| A | HOLD | 3.00 | 9개 (75%) |",
             "| B | HOLD_INSUFFICIENT_EVIDENCE | N/A | 8문항 (67%) |",
+            "| - | Evidence Coverage | 10/12 (83%) | 12/12 (100%) |",
+            "| Q1 | Market Size | 5 | 3 | N/A |",
+            "| - | Final Decision | INVEST | HOLD | HOLD_INSUFFICIENT_EVIDENCE |",
             "**판정 기준**: 12개 항목 중 9개 이상, 평균 3.2 이상이면 INVEST",
         ]
         self.state["final_report"] = self.state["final_report"].replace(
@@ -111,7 +118,8 @@ class ReportQualityTests(unittest.TestCase):
             self.assertIn(line, claims)
 
     def test_factual_numeric_table_rows_still_require_citations(self):
-        for line in ("| Figure AI | 100대 |", "| Figure AI | INVEST | 3.22 | 100대 배치 |"):
+        for line in ("| Figure AI | 100대 |", "| Figure AI | INVEST | 3.22 | 100대 배치 |",
+                     "| Q1 | Market Size | 100대 배치 |", "| - | Coverage | 매출 100억 |"):
             with self.subTest(line=line):
                 state = deepcopy(self.state)
                 state["final_report"] = state["final_report"].replace(
@@ -120,7 +128,7 @@ class ReportQualityTests(unittest.TestCase):
                 result = self.evaluate(state=state, judge=judge)
                 self.assertFalse(result["passed"])
                 self.assertIn("인용이 없습니다", self.reasons(result))
-                judge.assert_not_called()
+                judge.assert_called_once()
 
     def test_nonfactual_checklist_identifier_is_left_to_judge(self):
         self.state["final_report"] = self.state["final_report"].replace(
@@ -293,6 +301,41 @@ class ReportQualityTests(unittest.TestCase):
         config = structured.invoke.call_args.kwargs["config"]
         self.assertEqual(config["metadata"]["trace_id"], self.state["trace_id"])
         self.assertEqual(config["metadata"]["report_hash"], result["report_hash"])
+
+    def test_string_null_ids_are_normalized_for_whole_report_issue(self):
+        from evaluation.report_quality import JudgeOutput
+        def judge(payload):
+            response = issue_judge("neutrality", "보고서 구성 문제")(payload)
+            response["checks"][1]["issues"][0].update(claim_id="null", company="null")
+            # Also exercise the structured LLM's Pydantic parsing boundary.
+            parsed = JudgeOutput.model_validate(response)
+            issue = parsed.checks[1].issues[0]
+            self.assertIsNone(issue.claim_id)
+            self.assertIsNone(issue.company)
+            return parsed
+        result = self.evaluate(judge=judge)
+        self.assertTrue(result["judge_used"])
+        self.assertFalse(result["passed"])
+        issue = result["checks"][1]["issues"][0]
+        self.assertEqual(issue["statement"], "보고서 전체")
+        self.assertIsNone(issue["company"])
+
+    def test_string_null_company_still_rejected_for_analysis_owner(self):
+        def judge(payload):
+            response = issue_judge("groundedness", "분석 오류", "technology")(payload)
+            response["checks"][0]["issues"][0]["company"] = "null"
+            return response
+        with self.assertRaises(QualityJudgeError):
+            self.evaluate(judge=judge)
+
+    def test_null_normalization_does_not_hide_missing_claim_coverage(self):
+        def judge(payload):
+            response = issue_judge("neutrality", "보고서 구성 문제")(payload)
+            response["checks"][1]["issues"][0].update(claim_id="null", company="null")
+            response["checked_claim_ids"] = []
+            return response
+        with self.assertRaises(QualityJudgeError):
+            self.evaluate(judge=judge)
 
     def test_snapshot_cannot_be_changed_by_judge_callback(self):
         def judge(payload):
