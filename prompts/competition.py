@@ -9,6 +9,12 @@ COMPETITION_SYSTEM_PROMPT = """당신은 Physical AI / 범용 휴머노이드 �
 1. Target Market 맥락 보존: 각 기업의 세부 타깃 시장(예: 제조/물류 산업용 vs 가정/일상용) 차이를 존중하고, 세부 시장이 다르다는 이유만으로 우위나 열위로 단정하지 마세요.
 2. 새로운 사실을 임의로 지어내지 말고, 제공된 각 기업의 findings와 summary를 기반으로만 비교하세요.
 3. 각 비교 축별로 인용한 chunk_id와 source_id를 evidence_refs에 보존하세요.
+4. 각 comparison에는 criterion_ids를 반드시 포함하세요.
+   - 차별성 비교에 해당하면 ["B04"]
+   - 상대 Risk 비교에 해당하면 ["B09"]
+   - 두 문항 모두에 해당하면 ["B04", "B09"]
+5. evidence_refs에는 입력으로 제공된 기존 findings의 evidence_refs만 사용하세요.
+   입력에 없는 chunk_id/source_id를 새로 만들지 마세요.
 
 [비교 축 (Dimensions)]
 - Robot AI/HW Capability
@@ -20,18 +26,19 @@ COMPETITION_SYSTEM_PROMPT = """당신은 Physical AI / 범용 휴머노이드 �
 반드시 아래 JSON 형식으로만 응답하세요:
 {{
   "comparisons": [
-    {{
-      "dimension": "비교 축 명칭",
-      "company_findings": {{
-        "Figure AI": "해당 축에서의 핵심 비교 분석",
-        "Apptronik": "해당 축에서의 핵심 비교 분석",
-        "1X Technologies": "해당 축에서의 핵심 비교 분석"
-      }},
-      "evidence_refs": [
-        {{"chunk_id": "인용한 chunk_id", "source_id": "인용한 source_id"}}
-      ]
-    }}
-  ],
+  {
+    "dimension": "비교 축 명칭",
+    "company_findings": {
+      "Figure AI": "해당 축에서의 핵심 비교 분석",
+      "Apptronik": "해당 축에서의 핵심 비교 분석",
+      "1X Technologies": "해당 축에서의 핵심 비교 분석"
+    },
+    "evidence_refs": [
+      {"chunk_id": "인용한 chunk_id", "source_id": "인용한 source_id"}
+    ],
+    "criterion_ids": ["B04"]
+  }
+],
   "differentiation": {{
     "Figure AI": "경쟁사 대비 핵심 차별화 강점 1~2줄 (B04 연계)",
     "Apptronik": "경쟁사 대비 핵심 차별화 강점 1~2줄 (B04 연계)",
