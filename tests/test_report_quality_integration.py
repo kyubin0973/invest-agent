@@ -4,6 +4,7 @@ Supervisor files are read-only. Expected failures expose owner-1 integration bug
 instead of weakening the required FAILED termination assertions.
 """
 import logging
+import json
 import unittest
 from unittest.mock import patch
 
@@ -95,7 +96,8 @@ class QAIntegrationTests(unittest.TestCase):
         from agents.quality_evaluator import quality_evaluator_node
         nodes = workers.nodes()
         nodes[QUALITY] = quality_evaluator_node
-        with patch.dict(graph_module.WORKER_NODES, nodes):
+        with patch.dict(graph_module.WORKER_NODES, nodes), patch("core.llm.get_structured_llm") as factory:
+            factory.return_value.invoke.side_effect = lambda messages, **kwargs: passing_judge(json.loads(messages[1][1]))
             state = graph_module.build_graph().invoke(
                 {"candidate_companies": ["A", "B"], "company_profiles": {"A": {}, "B": {}}},
                 config={"recursion_limit": graph_module.recursion_limit(2)})

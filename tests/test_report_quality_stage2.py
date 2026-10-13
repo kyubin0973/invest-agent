@@ -35,7 +35,7 @@ class StageTwoTests(unittest.TestCase):
 
     def test_policy_distinguishes_disclosed_limits_from_unsupported_success(self):
         from prompts.report_quality import SYSTEM_PROMPT, QA_PROMPT_VERSION
-        self.assertEqual(QA_PROMPT_VERSION, 'report-quality-v3')
+        self.assertEqual(QA_PROMPT_VERSION, 'report-quality-v5')
         self.assertIn('검사 범위는 보고서가 실제로 주장한 내용', SYSTEM_PROMPT)
         self.assertIn('기업 발표를 출처에 귀속해 제한적으로 소개하는 것 자체는 편향이 아니다', SYSTEM_PROMPT)
         self.assertIn('근거 유무와 관계없이 금지', SYSTEM_PROMPT)

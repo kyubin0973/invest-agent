@@ -10,7 +10,7 @@ import os
 import re
 from typing import Callable, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 ITEMS = ("groundedness", "neutrality", "bias_control")
 SCHEMA_VERSION = "report-quality-v1"
@@ -48,12 +48,20 @@ class EvidenceID(StrictModel):
 
 
 class JudgeIssue(StrictModel):
-    claim_id: str | None
+    claim_id: str | None = Field(description="Existing claim ID, or JSON null for a whole-report issue; never the string 'null'.")
     evidence_ids: list[EvidenceID]
     suggested_owner: Literal["technology", "market_traction", "report_generator"]
-    company: str | None
+    company: str | None = Field(description="Candidate company name, or JSON null; analysis owners require a company name.")
     reason: str = Field(min_length=1)
     requested_fix: str = Field(min_length=1)
+
+    @field_validator("claim_id", "company", mode="before")
+    @classmethod
+    def normalize_null_literal(cls, value):
+        # Some structured LLM responses encode nullable IDs as a string.
+        # Normalize only this sentinel; unknown IDs and missing analysis owners
+        # must still fail the existing reference checks.
+        return None if value == "null" else value
 
 
 class JudgeCheck(StrictModel):
@@ -158,10 +166,13 @@ def _is_computed_summary(statement: str) -> bool:
     if not (text.startswith("|") and text.endswith("|")):
         return False
     cells = [cell.strip() for cell in text.strip("|").split("|")]
-    if len(cells) < 3 or cells[1] not in {"INVEST", "HOLD", "HOLD_INSUFFICIENT_EVIDENCE"}:
+    decisions = {"INVEST", "HOLD", "HOLD_INSUFFICIENT_EVIDENCE"}
+    if len(cells) < 3:
+        return False
+    if not (cells[1] in decisions or re.fullmatch(r"Q\d+|-", cells[0], re.I)):
         return False
     # A factual sentence appended to a table cell must still require a citation.
-    return all(re.fullmatch(r"(?:[\d\s.,/%()+\-]|개|문항)+|N/A|None|—", cell)
+    return all(cell in decisions or re.fullmatch(r"(?:[\d\s.,/%()+\-]|개|문항)+|N/A|None|—", cell)
                for cell in cells[2:])
 
 
@@ -327,6 +338,40 @@ def validate_judge(raw: object, payload: dict) -> JudgeOutput:
         raise QualityJudgeError("QA Judge 응답 구조 또는 입력 참조 검증 실패") from None
 
 
+def _judge_issues(item: str, check: JudgeCheck, payload: dict, state: dict) -> list[dict]:
+    by_id = {c["claim_id"]: c for c in payload["claims"]}
+    issues = []
+    for issue in check.issues:
+        claim = by_id.get(issue.claim_id)
+        refs = [r.model_dump() for r in issue.evidence_ids]
+        if not re.search(r"source_family_id|origin_source_id|출처\s*계보|소스\s*계보", issue.reason + " " + issue.requested_fix, re.I):
+            issues.append(_issue(item, issue.reason, issue.requested_fix, claim, refs,
+                                 issue.suggested_owner, issue.company))
+            continue
+        # Metadata repair belongs to the analyses that supplied the cited source.
+        selected = refs or (claim["evidence_ids"] if claim else [])
+        pairs = {(r["source_id"], r["chunk_id"]) for r in selected}
+        if not pairs:
+            pairs = {(e["source_id"], e["chunk_id"]) for e in payload["evidence"]
+                     if not (e.get("reference_metadata") or {}).get("source_family_id")
+                     and not (e.get("reference_metadata") or {}).get("origin_source_id")}
+        targets = {}
+        for owner, key in (("technology", "technology_results"), ("market_traction", "market_traction_results")):
+            for company, analysis in (state.get(key) or {}).items():
+                if company not in payload["candidate_companies"] or (issue.company and company != issue.company):
+                    continue
+                owned = [{"source_id": e.get("source_id"), "chunk_id": e.get("chunk_id")}
+                         for e in analysis.get("evidence", [])
+                         if (e.get("source_id"), e.get("chunk_id")) in pairs]
+                if owned:
+                    targets[owner, company] = owned
+        if not targets:
+            raise QualityJudgeError("QA 출처 계보 지적의 분석 담당·기업을 근거에서 확인할 수 없습니다.")
+        for (owner, company), owned in targets.items():
+            issues.append(_issue(item, issue.reason, issue.requested_fix, claim, owned, owner, company))
+    return issues
+
+
 def evaluate(state: dict, *, original_documents: dict | None = None,
              judge: Callable[[dict], object] | None = None) -> dict:
     from prompts.report_quality import QA_PROMPT_VERSION
@@ -336,7 +381,7 @@ def evaluate(state: dict, *, original_documents: dict | None = None,
                "reason": "결정적 검사 미달로 의미 검사를 실행하지 않았습니다.",
                "issues": [], "missing_information": []} for item in ITEMS]
     judge_used = False
-    if rules:
+    if not payload["claims"]:
         checks[0].update(verdict="fail", reason="근거·보고서 입력 규칙 미달", issues=rules,
                          missing_information=limitations)
     else:
@@ -355,15 +400,17 @@ def evaluate(state: dict, *, original_documents: dict | None = None,
             raise QualityJudgeError("QA Judge 호출 실패; Supervisor 재시도 필요") from None
         output = validate_judge(raw, payload)
         judge_used = True
-        by_id = {c["claim_id"]: c for c in payload["claims"]}
         checks = []
         for item in ITEMS:
             check = next(c for c in output.checks if c.item == item)
-            issues = [_issue(item, i.reason, i.requested_fix, by_id.get(i.claim_id),
-                             [r.model_dump() for r in i.evidence_ids], i.suggested_owner, i.company)
-                      for i in check.issues]
+            issues = _judge_issues(item, check, payload, state)
             checks.append({"item": item, "passed": check.verdict == "pass", "verdict": check.verdict,
                            "reason": check.reason, "issues": issues, "missing_information": check.missing_information})
+        if rules:
+            checks[0].update(passed=False, verdict="fail",
+                             reason="근거·보고서 입력 규칙 미달; " + checks[0]["reason"],
+                             issues=rules + checks[0]["issues"],
+                             missing_information=list(dict.fromkeys(limitations + checks[0]["missing_information"])))
         # 출처 계보 필드는 기존 계약의 필수값이 아니다. 기존 URL·발행기관·원문을
         # 함께 본 Judge의 내용 판정을 사용하며 불확실 판정은 여전히 불합격이다.
     return {"passed": judge_used and all(c["passed"] for c in checks), "checks": checks,

@@ -1,7 +1,7 @@
 import unittest
 
 from evaluation.judge_input import validate_and_build_evidence_context
-from scripts.run_judge_demo import build_demo_state
+from tests.judge_input_fixtures import build_demo_state
 
 
 class JudgeInputValidationTests(unittest.TestCase):
