@@ -12,10 +12,11 @@
   - 근거 충분성과 보고서 품질의 판정은 Investment Judge와 Quality Evaluator(LLM + Python 검증)가 하고, Supervisor는 그 결과가 담긴 State로 분기만 결정 (판정은 확률적, 분기는 결정론적)
 
 
-## Evaluation Targets
-- Figure AI : 산업용 (자동차 제조·물류 공정), 가정용 확장 준비
-- Apptronik : 산업용 (제조·물류 현장 물품 이송, 반복 작업)
-- 1X Technologies : 가정용 (가사 보조·일상 지원)
+## Selected Startups
+선정 기준 : General-purpose Humanoid Robotics 분야의 비상장·Exit 이전 스타트업 중, 공개 자료로 기술·시장 근거를 확보할 수 있고 Target Market이 서로 다른 기업
+- Figure AI — 산업용 (자동차 제조·물류 공정), 가정용 확장 준비. 선정 이유 : 완성차 공장 배치 사례와 자체 AI(Helix)·전용 생산시설(BotQ) 자료가 공개되어 상용 배치와 양산 근거를 함께 평가할 수 있음
+- Apptronik — 산업용 (제조·물류 현장 물품 이송, 반복 작업). 선정 이유 : 부품·생산 파트너(Texas Instruments, Jabil)의 외부 자료가 있어 기업 자체 발표와 외부 검증 근거를 구분해 평가할 수 있음
+- 1X Technologies — 가정용 (가사 보조·일상 지원). 선정 이유 : 산업용 두 기업과 Target Market이 다른 가정용 사례로, 판매가·구독 모델이 공개되어 사업모델 문항을 비교할 수 있음
 - 평가 기준 : Bessemer Checklist 10문항 + 휴머노이드 특화 2문항 (Q1~Q12)
 
 
