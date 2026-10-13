@@ -25,10 +25,14 @@ from langsmith import traceable
 
 from core.state import InvestmentState, QualityCheck, QualityResult
 from evaluation.report_quality import evaluate, redact_secrets, report_identity, result_is_current
+from evaluation.report_quality_contract import to_common_check, to_common_result
+from evaluation.report_quality_sources import load_original_documents
 
 # 위 원본 주석을 보존한다. 원본 TODO의 세 검사는 이제 Hybrid QA 결과를 반환한다.
 # 공통 결과는 한 번만 평가하고 _check_*에 전달하므로 Judge를 세 번 호출하지 않는다.
-# 원문 주입·상세 필드는 QA 내부 확장이며 공통 State 계약은 담당자 합의 후 연결한다.
+# 상세 판정은 QA 내부·trace에만 보존하고 공통 State에는 기존 필드만 반환한다.
+# 원본 중립성 설명을 보존하며 실제 정책은 기술 추천·우열 결론을 근거 유무와
+# 관계없이 금지한다. 투자 결과 검증과 기술 추천의 경계는 QA 전용 정책에 명시한다.
 
 
 def _check_groundedness(state: InvestmentState, *, _evaluation: dict | None = None,
@@ -36,7 +40,7 @@ def _check_groundedness(state: InvestmentState, *, _evaluation: dict | None = No
     """원문·인용·REFERENCE에 대한 규칙 검사와 Judge의 근거성 결과를 반환한다."""
     result = _evaluation if _evaluation is not None else evaluate(
         state, original_documents=original_documents, judge=judge)
-    return deepcopy(next(check for check in result["checks"] if check["item"] == "groundedness"))
+    return to_common_check(next(check for check in result["checks"] if check["item"] == "groundedness"))
 
 
 def _check_neutrality(state: InvestmentState, *, _evaluation: dict | None = None,
@@ -44,7 +48,7 @@ def _check_neutrality(state: InvestmentState, *, _evaluation: dict | None = None
     """기술 우열·추천 및 사실·해석·전망 구분에 대한 중립성 결과를 반환한다."""
     result = _evaluation if _evaluation is not None else evaluate(
         state, original_documents=original_documents, judge=judge)
-    return deepcopy(next(check for check in result["checks"] if check["item"] == "neutrality"))
+    return to_common_check(next(check for check in result["checks"] if check["item"] == "neutrality"))
 
 
 def _check_bias_control(state: InvestmentState, *, _evaluation: dict | None = None,
@@ -52,7 +56,7 @@ def _check_bias_control(state: InvestmentState, *, _evaluation: dict | None = No
     """홍보 편중·출처 계보·위험 누락·기준 일관성에 대한 편향 검사 결과를 반환한다."""
     result = _evaluation if _evaluation is not None else evaluate(
         state, original_documents=original_documents, judge=judge)
-    return deepcopy(next(check for check in result["checks"] if check["item"] == "bias_control"))
+    return to_common_check(next(check for check in result["checks"] if check["item"] == "bias_control"))
 
 
 def _trace_input(inputs: dict) -> dict:
@@ -79,7 +83,7 @@ def _trace_output(output: dict) -> dict:
 
 
 @traceable(name="report_quality_evaluation", process_inputs=_trace_input, process_outputs=_trace_output)
-def evaluate_report(state: InvestmentState, *, original_documents: dict | None = None, judge=None) -> QualityResult:
+def evaluate_report_details(state: InvestmentState, *, original_documents: dict | None = None, judge=None) -> dict:
     # 동일 스냅샷으로 한 번 평가한 결과를 기존 세 함수에서 항목별로 받아 합산한다.
     snapshot = deepcopy(state)
     result = evaluate(snapshot, original_documents=original_documents, judge=judge)
@@ -89,18 +93,27 @@ def evaluate_report(state: InvestmentState, *, original_documents: dict | None =
     return {
         **result,
         "passed": result["judge_used"] and all(c["passed"] for c in checks),
-        "checks": checks,
         "feedback": [
-            f"[{c['item']}] {issue['statement']} — {issue['reason']} 수정: {issue['requested_fix']}"
+            f"[{c['item']}] {issue['statement']} — {issue['reason']}"
             for c in checks if not c["passed"]
             for issue in c["issues"] if issue["owner"] == "report_generator"
         ],
     }
 
 
+def evaluate_report(state: InvestmentState, *, original_documents: dict | None = None, judge=None) -> QualityResult:
+    """기존 공통 QualityResult만 반환한다. 상세 결과는 별도 QA 함수·trace에 둔다.
+
+    버전/hash 상세 검증에는 evaluate_report_details()를 사용한다. 두 함수는 각자
+    평가를 실행하므로 같은 보고서에 연달아 호출해 Judge 비용을 중복시키지 않는다.
+    """
+    return to_common_result(evaluate_report_details(state, original_documents=original_documents, judge=judge))
+
+
 def quality_evaluator_node(state: InvestmentState) -> dict:
     # Judge 예외는 기존 worker에서 기록·재시도하며 합격으로 바꾸지 않는다.
-    return {"quality_result": evaluate_report(state)}
+    originals = load_original_documents(state)
+    return {"quality_result": evaluate_report(state, original_documents=originals)}
 
 
-__all__ = ["evaluate_report", "quality_evaluator_node", "result_is_current"]
+__all__ = ["evaluate_report", "evaluate_report_details", "quality_evaluator_node", "result_is_current"]

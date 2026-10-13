@@ -132,6 +132,30 @@ def _normalize_quote(text: str) -> str:
     return " ".join(text.split())
 
 
+_LIGATURE_MARK = "\ufffd"
+_LIGATURES = re.compile(r"ffi|ffl|ff|fi|fl")
+
+
+def _ligature_key(text: str) -> str:
+    """PDF 추출에서 fi/fl 합자가 NUL(\\x00)로 깨진 자리를 원문·인용 양쪽에서 같은 표시로 맞춘다."""
+    return _LIGATURES.sub(_LIGATURE_MARK, _normalize_quote(text.replace("\x00", _LIGATURE_MARK)))
+
+
+def _quote_in_source(quote: str, source: str) -> bool:
+    """인용문이 원문의 연속 구절인지 대조한다.
+
+    1) 공백·문장부호 모양·제어문자만 정규화해 비교한다 (기존 규칙).
+    2) 원문의 깨진 합자(예: "speci\\x00c")는 인용의 fi/fl/ff(예: "specific")와 같은 것으로 본다.
+       합자 외의 빠진 글자는 복원하지 않는다. 등급·범위 판정 정규식에는 쓰지 않는다.
+    """
+    normalized = _normalize_quote(quote)
+    if not normalized:
+        return False
+    return normalized in _normalize_quote(source) or (
+        "\x00" in source and _ligature_key(quote) in _ligature_key(source)
+    )
+
+
 def _matches(pattern: str, text: str) -> bool:
     return re.search(pattern, text, re.IGNORECASE) is not None
 
@@ -183,8 +207,11 @@ def _scope_error(statement: str, quote: str) -> str | None:
     return None
 
 
-def _level_error(item: EvidenceDraft, source_type: str) -> str | None:
-    """허용 근거가 명시되지 않은 등급은 제외한다. 자동 승급/강등하지 않는다."""
+def _level_shortfall(item: EvidenceDraft, source_type: str) -> str | None:
+    """LLM이 붙인 등급의 조건이 인용문으로 확인되지 않으면 그 이유를 돌려준다.
+
+    조건을 못 갖춘 근거는 버리지 않고 가장 낮은 E1(주장·계획)로만 낮춘다 (_assemble). 승급은 하지 않는다.
+    """
     level = item.evidence_level
     confirmed = _confirmed_sentences(item.supporting_quote)
     if source_type == "company" and level not in ("E1", "E2"):
@@ -197,7 +224,7 @@ def _level_error(item: EvidenceDraft, source_type: str) -> str | None:
         required = _CURRENT if level == "E3" else _OPERATION
         if not _matches(required, confirmed) or (level == "E5" and not _matches(_REPEATED, confirmed)):
             return f"{level}에 필요한 현재 사실·운영·반복 확인 근거 없음"
-    return _scope_error(item.fact, item.supporting_quote)
+    return None
 
 
 def _search(company: str, queries: list[str], scope: dict | None, k: int = TOP_K) -> list[Document]:
@@ -305,20 +332,24 @@ def _assemble(
             reason = "인용 ID가 검색 원본과 일치하지 않음"
         elif counts[item.chunk_id] > 1:
             reason = "동일 청크의 근거 분석이 중복됨"
-        elif not _normalize_quote(item.supporting_quote) or (
-            _normalize_quote(item.supporting_quote) not in _normalize_quote(originals[item.chunk_id].page_content)
-        ):
+        elif not _quote_in_source(item.supporting_quote, originals[item.chunk_id].page_content):
             reason = "뒷받침 인용문이 원문에 없음"
         else:
-            reason = _level_error(item, available[item.chunk_id]["source_type"])
+            reason = _scope_error(item.fact, item.supporting_quote)
         if reason:
             missing.append(f"근거 검증 실패({item.chunk_id}): {reason}")
             continue
+        level = item.evidence_level
+        shortfall = _level_shortfall(item, available[item.chunk_id]["source_type"])
+        if shortfall:
+            # 상위 등급 조건이 확인되지 않으면 버리지 않고 E1(주장·계획 수준)로 낮춰 보존한다.
+            missing.append(f"근거 수준 하향({item.chunk_id}): {level}→E1, {shortfall}")
+            level = "E1"
         fact = item.fact
         if available[item.chunk_id]["source_type"] == "company":
             fact = f"{company} 자체 발표에 따르면: {fact}"
         evidence[item.chunk_id] = {
-            **available[item.chunk_id], "fact": fact, "evidence_level": item.evidence_level,
+            **available[item.chunk_id], "fact": fact, "evidence_level": level,
         }
 
     # 참조의 존재 여부와 LLM의 별도 근거 분석 누락은 구분한다.

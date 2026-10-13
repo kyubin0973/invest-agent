@@ -202,8 +202,7 @@ class TechnologyNodeTests(unittest.TestCase):
 
     def test_invalid_evidence_removes_dependent_claim_from_all_output_text(self):
         for change in ({"source_id": "FAKE"}, {"chunk_id": "FAKE"},
-                       {"supporting_quote": "This text was invented."},
-                       {"evidence_level": "E3"}, {"evidence_level": "E4"}, {"evidence_level": "E5"}):
+                       {"supporting_quote": "This text was invented."}):
             with self.subTest(change=change):
                 draft = analysis(self.doc, all_questions=False)
                 draft["evidence"][0].update(change)
@@ -219,6 +218,15 @@ class TechnologyNodeTests(unittest.TestCase):
                 self.assertEqual(result["risks"], [])
                 self.assertNotIn("유출되면", json.dumps(result, ensure_ascii=False))
                 self.assertTrue(any("검증 실패" in m for m in result["missing_information"]))
+
+    def test_unverified_level_on_company_source_is_lowered_to_e1_not_dropped(self):
+        for level in ("E3", "E4", "E5"):
+            with self.subTest(level=level):
+                draft = analysis(self.doc, level=level, all_questions=False)
+                result = self.result([review(self.doc), draft])
+                self.assertEqual([e["evidence_level"] for e in result["evidence"]], ["E1"])  # 승급 없이 E1로만
+                self.assertEqual(len(result["findings"]), 1)
+                self.assertTrue(any(f"근거 수준 하향(F1_P02_C01): {level}→E1" in m for m in result["missing_information"]))
 
     def test_partial_invalid_references_drop_entire_compound_finding(self):
         draft = analysis(self.doc, all_questions=False)
@@ -291,7 +299,7 @@ class TechnologyNodeTests(unittest.TestCase):
         self.assertIn("[A5_P02_C01 | A5]", result["risks"][0])
         self.assertNotIn("자체 발표", result["evidence"][0]["fact"])
 
-    def test_external_current_application_allows_e3_but_not_demo_or_operating_levels(self):
+    def test_external_current_application_keeps_e3_and_lowers_unverified_levels_to_e1(self):
         doc = document("A4", source_type="partner",
                        text="Apptronik incorporated TI's motor-control technologies.")
         for level in ("E2", "E3", "E4", "E5"):
@@ -300,16 +308,17 @@ class TechnologyNodeTests(unittest.TestCase):
                 draft["evidence"][0].update(fact="TI 모터 제어 기술이 적용되어 있다.", supporting_quote=doc.page_content)
                 draft["findings"][0]["statement"] = "TI 모터 제어 기술이 적용되어 있다."
                 result = _assemble("Apptronik", [doc], TechnologyAnalysis.model_validate(draft), [])
-                self.assertEqual(len(result["evidence"]), int(level == "E3"))
-                self.assertEqual(len(result["findings"]), int(level == "E3"))
-                if level == "E3":
-                    self.assertEqual(result["evidence"][0]["evidence_level"], "E3")
-        # 출처만 외부이거나 시연이라는 단어만 나오는 계획/부정문은 실적이 아니다.
+                self.assertEqual(len(result["findings"]), 1)
+                # 현재 적용 사실은 E3로 확인되고, 시연·운영·반복 근거가 없는 등급은 E1로만 낮춘다.
+                self.assertEqual(result["evidence"][0]["evidence_level"], "E3" if level == "E3" else "E1")
+        # 출처만 외부이거나 시연이라는 단어만 나오는 계획/부정문은 실적 등급(E2·E3)을 받지 못한다.
         for quote in ("TI will demonstrate a prototype next year.", "TI has not demonstrated a prototype."):
             doc.page_content = quote
             for level in ("E2", "E3"):
-                draft["evidence"][0].update(supporting_quote=quote, evidence_level=level)
-                self.assertEqual(_assemble("Apptronik", [doc], TechnologyAnalysis.model_validate(draft), [])["evidence"], [])
+                with self.subTest(quote=quote, level=level):
+                    draft["evidence"][0].update(supporting_quote=quote, evidence_level=level)
+                    result = _assemble("Apptronik", [doc], TechnologyAnalysis.model_validate(draft), [])
+                    self.assertEqual([e["evidence_level"] for e in result["evidence"]], ["E1"])
 
     def test_component_safety_keeps_application_but_excludes_system_claim_in_fact_or_finding(self):
         doc = document("A4", source_type="partner", text=(
@@ -392,10 +401,18 @@ class TechnologyNodeTests(unittest.TestCase):
         self.assertEqual(len(result["evidence"]), 1)
         self.assertEqual(self.doc.page_content, original)
 
-    def test_normalization_does_not_restore_missing_letters_or_accept_empty_quote(self):
+    def test_normalization_restores_only_broken_ligatures_and_rejects_empty_quote(self):
+        # PDF에서 fi 합자가 NUL로 깨진 자리만 fi/fl/ff로 대조한다 (실제 Apptronik A5 원문 사례).
         self.doc.page_content = "The robot performs speci\x00c tasks."
-        for quote in ("The robot performs specific tasks.", "\x00\u200b"):
+        draft = analysis(self.doc)
+        draft["evidence"][0]["supporting_quote"] = "The robot performs specific tasks."
+        self.assertEqual(len(self.result([review(self.doc), draft])["evidence"]), 1)
+        # 합자가 아닌 빠진 글자는 복원하지 않고, 빈 인용은 받지 않는다.
+        self.doc.page_content = "The robot perf\x00rms tasks."
+        for quote in ("The robot performs tasks.", "\x00\u200b"):
             with self.subTest(quote=quote):
+                for m in (self.search, self.factory, self.llm.invoke):
+                    m.reset_mock()
                 draft = analysis(self.doc)
                 draft["evidence"][0]["supporting_quote"] = quote
                 result = self.result([review(self.doc), draft])

@@ -85,6 +85,7 @@ def fingerprint(value: object) -> str:
 
 
 def report_identity(state: dict) -> tuple[int | str | None, str]:
+    """독립 QA의 작성 차수와 실제 본문 hash. 공통 State 필드를 추가하지 않는다."""
     version = state.get("report_version", state.get("report_attempts"))
     report = state.get("final_report")
     return version, sha256((report if isinstance(report, str) else "").encode()).hexdigest()
@@ -97,7 +98,13 @@ def context_fingerprint(state: dict) -> str:
 
 
 def result_is_current(state: dict, result: dict | None = None, *, original_documents: dict | None = None) -> bool:
-    """Integration hook: current does not mean passed. Supervisor checks both."""
+    """독립 QA 상세 결과의 버전·본문·근거가 현재 입력과 일치하는지 검사한다.
+
+    evaluate_report_details()의 결과를 result에 전달한다. 유효성은 합격과 다르다.
+    공통 evaluate_report()/quality_result에는 hash metadata가 없으므로 그 결과만
+    전달하면 False다. Supervisor의 QA 무효화·재검사 제어를 대신하지 않는다.
+    original_documents를 전달하면 실제 원문 입력 fingerprint도 비교한다.
+    """
     result = result if result is not None else state.get("quality_result")
     version, digest = report_identity(state)
     current = bool(result and state.get("final_report") and version is not None
@@ -141,6 +148,21 @@ def _issue(criterion: str, reason: str, fix: str, claim: dict | None = None,
             "statement": claim["statement"] if claim else "보고서 전체",
             "evidence_ids": refs or [], "owner": owner, "suggested_owner": owner,
             "company": company, "reason": reason, "requested_fix": fix}
+
+
+def _is_computed_summary(statement: str) -> bool:
+    """Recognize policy labels and verdict rows, while keeping them for Judge review."""
+    text = re.sub(r"\*\*|__", "", statement).strip()
+    if re.match(r"^(?:[-*+]\s+)?판정\s*기준\s*[:：]", text):
+        return True
+    if not (text.startswith("|") and text.endswith("|")):
+        return False
+    cells = [cell.strip() for cell in text.strip("|").split("|")]
+    if len(cells) < 3 or cells[1] not in {"INVEST", "HOLD", "HOLD_INSUFFICIENT_EVIDENCE"}:
+        return False
+    # A factual sentence appended to a table cell must still require a citation.
+    return all(re.fullmatch(r"(?:[\d\s.,/%()+\-]|개|문항)+|N/A|None|—", cell)
+               for cell in cells[2:])
 
 
 def _add_evidence(registry: dict, item: dict, issues: list[dict]) -> None:
@@ -203,7 +225,8 @@ def prepare_input(state: dict, original_documents: dict | None = None) -> tuple[
         numeric_assertion = re.search(
             r"\d+(?:[.,]\d+)?\s*(?:%|대|명|개|억|만|조|달러|원|년|개월|시간|일|회|USD|KRW|billion|million)"
             r"|\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b", text, re.I)
-        if not pairs and (numeric_assertion or any(s in text for s in known_statements)):
+        if (not pairs and not _is_computed_summary(claim["statement"])
+                and (numeric_assertion or any(s in text for s in known_statements))):
             issues.append(_issue("groundedness", "수치 또는 근거 기반 분석 문장에 인용이 없습니다.",
                                  "근거를 연결하거나 사실이 아닌 표기임을 명확히 하세요.", claim))
         for pair, ref_id in zip(pairs, claim["evidence_ids"]):
@@ -341,13 +364,8 @@ def evaluate(state: dict, *, original_documents: dict | None = None,
                       for i in check.issues]
             checks.append({"item": item, "passed": check.verdict == "pass", "verdict": check.verdict,
                            "reason": check.reason, "issues": issues, "missing_information": check.missing_information})
-        lineage_limits = [m for m in limitations if "출처 계보" in m]
-        if lineage_limits:
-            bias = next(c for c in checks if c["item"] == "bias_control")
-            bias.update(passed=False, verdict="uncertain", reason="출처 독립성을 확인할 계보 정보 부족")
-            bias["missing_information"].extend(lineage_limits)
-            bias["issues"].append(_issue("bias_control", "; ".join(lineage_limits),
-                                        "원본 발표 계보를 확인하고 source_family_id/origin_source_id를 제공하세요."))
+        # 출처 계보 필드는 기존 계약의 필수값이 아니다. 기존 URL·발행기관·원문을
+        # 함께 본 Judge의 내용 판정을 사용하며 불확실 판정은 여전히 불합격이다.
     return {"passed": judge_used and all(c["passed"] for c in checks), "checks": checks,
             "feedback": [f"[{c['item']}] {i['statement']} — {i['reason']} 수정: {i['requested_fix']}"
                          for c in checks for i in c["issues"] if i["owner"] == "report_generator"],

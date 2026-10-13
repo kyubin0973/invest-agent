@@ -35,9 +35,23 @@ def competition_node(state: InvestmentState) -> dict:
         for c in companies
     }
 
-    # 2. State에 축적된 기업별 분석 데이터 및 evidence_refs 취합
+    # 2. State에 축적된 기업별 분석 데이터 취합
+    valid_refs = set()
+
+    for comp in companies:
+        t_res = tech_results.get(comp, {})
+        m_res = market_results.get(comp, {})
+
+        for f in t_res.get("findings", []):
+            for ref in f.get("evidence_refs", []):
+                valid_refs.add((ref["chunk_id"], ref["source_id"]))
+
+        for f in m_res.get("findings", []):
+            for ref in f.get("evidence_refs", []):
+                valid_refs.add((ref["chunk_id"], ref["source_id"]))
+
+
     analysis_lines = []
-    all_refs = []
 
     for comp in companies:
         t_res = tech_results.get(comp, {})
@@ -47,16 +61,26 @@ def competition_node(state: InvestmentState) -> dict:
         t_summary = t_res.get("summary", "기술 분석 결과 없음")
         m_summary = m_res.get("summary", "시장 분석 결과 없음")
 
-        for f in t_res.get("findings", []):
-            all_refs.extend(f.get("evidence_refs", []))
-        for f in m_res.get("findings", []):
-            all_refs.extend(f.get("evidence_refs", []))
+        tech_findings = "\n".join(
+            f"- [{f.get('dimension', '')}] {f.get('statement', '')} "
+            f"(근거: {f.get('evidence_refs', [])})"
+            for f in t_res.get("findings", [])
+        ) or "- 없음"
+
+        market_findings = "\n".join(
+            f"- [{f.get('dimension', '')}] {f.get('statement', '')} "
+            f"(근거: {f.get('evidence_refs', [])})"
+            for f in m_res.get("findings", [])
+        ) or "- 없음"
+        
 
         analysis_lines.append(
             f"=== 대상 기업: {comp} (세부 Target Market: {market_desc}) ===\n"
             f"[기술/제품 분석 요약]: {t_summary}\n"
+            f"[기술 findings]\n{tech_findings}\n"
             f"[기술 리스크]: {', '.join(t_res.get('risks', []))}\n"
             f"[시장/고객/BM 요약]: {m_summary}\n"
+            f"[시장 findings]\n{market_findings}\n"
             f"[시장/상용화 리스크]: {', '.join(m_res.get('risks', []))}\n"
         )
 
@@ -87,12 +111,28 @@ def competition_node(state: InvestmentState) -> dict:
         }
 
     # 5. comparisons 항목 정제
+    VALID_CRITERION_IDS = {"B04", "B09"}
     formatted_comparisons: list[Comparison] = []
+
     for item in parsed.get("comparisons", []):
+        refs = [
+            ref
+            for ref in item.get("evidence_refs", [])
+            if (
+                ref.get("chunk_id"),
+                ref.get("source_id"),
+            ) in valid_refs
+        ]
+
         formatted_comparisons.append({
             "dimension": item.get("dimension", ""),
             "company_findings": item.get("company_findings", {}),
-            "evidence_refs": item.get("evidence_refs", all_refs[:2]),
+            "evidence_refs": refs,
+            "criterion_ids": [
+                cid
+                for cid in item.get("criterion_ids", [])
+                if cid in VALID_CRITERION_IDS
+            ],
         })
 
     result: CompetitionResult = {

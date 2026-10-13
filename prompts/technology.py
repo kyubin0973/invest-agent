@@ -97,7 +97,8 @@ TECHNOLOGY_RULES = """[Technology 역할과 근거 처리]
   예: TI가 Apollo에 TI motor-control 기술이 현재 적용됐다고 확인하면 그 기술 적용 사실은 E3 가능하다.
   단, partner라는 이유만으로 E3를 주지 않으며 장기 신뢰성·반복 성공률·상용 운영 성능·미래 개선까지
   확인된 것으로 확대하지 않는다. 미래 개선은 계획으로 표현하고 해당 주장에는 E1을 적용한다.
-- Python은 supporting_quote에 실제 시연·시험 근거가 없는 E2를 제외한다. 등급을 자동 교정하지 않는다.
+- Python은 supporting_quote로 조건이 확인되지 않는 E2~E5를 E1(주장·계획 수준)로 낮춘다. 등급을 올리지는 않는다.
+  처음부터 인용문이 직접 확인하는 수준으로 표시하라.
   외부 출처의 현재 기술 적용 사실은 E3로 분류하되, 인용문도 그 현재 사실을 직접 확인해야 한다.
   예: TI 원문의 "Apptronik incorporated TI’s motor-control technologies"는 기술 적용 사실(E3)이다.
   E4는 실제 운영·계약, E5는 실제 운영과 반복·규모화가 인용문에 모두 확인되어야 한다.

@@ -8,10 +8,11 @@ import unittest
 from unittest.mock import patch
 
 from agents import supervisor
-from agents.quality_evaluator import evaluate_report
+from agents.quality_evaluator import evaluate_report_details as evaluate_report
 from agents.supervisor import FINISH, QUALITY, REPORT
 from core import graph as graph_module
 from evaluation.report_quality import QualityJudgeError, result_is_current
+from evaluation.report_quality_contract import to_common_result
 from tests.qa_fixtures import EXAGGERATED, NORMAL, fixture, issue_judge, passing_judge
 from tests.test_supervisor import Workers, run
 
@@ -47,7 +48,7 @@ class QAWorkers(Workers):
             judge = passing_judge
         result = evaluate_report(local, original_documents=originals, judge=judge)
         self.results.append(result)
-        return {"quality_result": result}
+        return {"quality_result": to_common_result(result)}
 
 
 class QAIntegrationTests(unittest.TestCase):
@@ -100,7 +101,7 @@ class QAIntegrationTests(unittest.TestCase):
                 config={"recursion_limit": graph_module.recursion_limit(2)})
         self.assertEqual(state["next"], FINISH)
         self.assertFalse(state["quality_result"]["passed"])
-        self.assertFalse(state["quality_result"]["judge_used"])
+        self.assertEqual(set(state["quality_result"]), {"passed", "checks", "feedback"})
         self.assertEqual(state["report_attempts"], supervisor.MAX_REPORT_ATTEMPTS)
 
     @unittest.expectedFailure
@@ -130,9 +131,9 @@ class QAIntegrationTests(unittest.TestCase):
         state.update(market_traction_results={"A": local["technology_results"]["A"]},
                      investment_results={"A": {"criteria": [], "decision": "HOLD"}},
                      competition_result={"comparisons": []}, pending_judge=[], report_evaluated=True,
-                     report_attempts=2, quality_result=result)
+                     report_attempts=2, quality_result=to_common_result(result))
         state["final_report"] += "수정된 본문\n"
-        self.assertFalse(result_is_current(state))
+        self.assertFalse(result_is_current(state, result))
         self.assertEqual(supervisor.decide(state).next, QUALITY)  # currently accepts the stale pass
 
 

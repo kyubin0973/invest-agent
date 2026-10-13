@@ -70,7 +70,7 @@ class ReportQualityTests(unittest.TestCase):
                 result = check(self.state, original_documents=self.originals,
                                judge=issue_judge(item, "수정 필요한 실제 항목"))
                 self.assertFalse(result["passed"])
-                self.assertTrue(result["issues"][0]["requested_fix"])
+                self.assertIn("수정 요청:", result["issues"][0]["reason"])
 
     def test_placeholder_fails_without_paid_call(self):
         judge = Mock(side_effect=AssertionError("must not call"))
@@ -92,6 +92,35 @@ class ReportQualityTests(unittest.TestCase):
     def test_numeric_claim_without_citation_is_rejected(self):
         self.state["final_report"] = self.state["final_report"].replace(NORMAL, "A는 100대의 로봇을 배치했다.")
         self.assertIn("인용이 없습니다", self.reasons(self.evaluate()))
+
+    def test_computed_verdict_rows_and_policy_reach_judge_without_citations(self):
+        lines = [
+            "| Figure AI | INVEST | 3.22 | 12/12 (100%) |",
+            "| A | HOLD | 3.00 | 9개 (75%) |",
+            "| B | HOLD_INSUFFICIENT_EVIDENCE | N/A | 8문항 (67%) |",
+            "**판정 기준**: 12개 항목 중 9개 이상, 평균 3.2 이상이면 INVEST",
+        ]
+        self.state["final_report"] = self.state["final_report"].replace(
+            "# REFERENCE", "\n".join(lines) + "\n# REFERENCE")
+        judge = Mock(side_effect=passing_judge)
+        result = self.evaluate(judge=judge)
+        self.assertTrue(result["passed"])
+        judge.assert_called_once()
+        claims = [claim["statement"] for claim in judge.call_args.args[0]["claims"]]
+        for line in lines:
+            self.assertIn(line, claims)
+
+    def test_factual_numeric_table_rows_still_require_citations(self):
+        for line in ("| Figure AI | 100대 |", "| Figure AI | INVEST | 3.22 | 100대 배치 |"):
+            with self.subTest(line=line):
+                state = deepcopy(self.state)
+                state["final_report"] = state["final_report"].replace(
+                    "# REFERENCE", line + "\n# REFERENCE")
+                judge = Mock(side_effect=passing_judge)
+                result = self.evaluate(state=state, judge=judge)
+                self.assertFalse(result["passed"])
+                self.assertIn("인용이 없습니다", self.reasons(result))
+                judge.assert_not_called()
 
     def test_nonfactual_checklist_identifier_is_left_to_judge(self):
         self.state["final_report"] = self.state["final_report"].replace(
@@ -176,13 +205,14 @@ class ReportQualityTests(unittest.TestCase):
         self.assertEqual(issue["company"], "A")
         self.assertTrue(issue["requested_fix"])
 
-    def test_missing_lineage_cannot_be_overridden_by_passing_judge(self):
+    def test_missing_optional_lineage_is_evaluated_without_new_required_fields(self):
         for obj in (self.state["references"][0], self.state["technology_results"]["A"]["evidence"][0]):
             obj["reference_metadata"].pop("source_family_id")
-        result = self.evaluate()
-        self.assertFalse(result["passed"])
-        self.assertEqual(result["checks"][2]["verdict"], "uncertain")
-        self.assertTrue(result["checks"][2]["missing_information"])
+        judge = Mock(side_effect=passing_judge)
+        result = self.evaluate(judge=judge)
+        judge.assert_called_once()
+        self.assertTrue(result["passed"])
+        self.assertIn("출처 계보", " ".join(result["missing_information"]))
 
     def test_uncertain_judge_does_not_pass(self):
         result = self.evaluate(judge=issue_judge("bias_control", "독립 검증 여부 불확실", uncertain=True))
@@ -325,9 +355,10 @@ class ReportQualityTests(unittest.TestCase):
         self.assertEqual(trace_output["feedback"], [])
 
     def test_node_preserves_existing_return_boundary(self):
-        with patch("agents.quality_evaluator.evaluate_report", return_value={"passed": False}) as mocked:
+        with (patch("agents.quality_evaluator.load_original_documents", return_value={}),
+              patch("agents.quality_evaluator.evaluate_report", return_value={"passed": False}) as mocked):
             self.assertEqual(quality_evaluator_node(self.state), {"quality_result": {"passed": False}})
-            mocked.assert_called_once_with(self.state)
+            mocked.assert_called_once_with(self.state, original_documents={})
 
 
 if __name__ == "__main__":
